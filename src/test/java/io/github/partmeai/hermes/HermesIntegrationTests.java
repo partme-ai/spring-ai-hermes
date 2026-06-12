@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Integration tests against a real local Hermes Gateway.
- * Requires: hermes gateway --port 18789 --allow-unconfigured
+ * Requires: hermes gateway --port 8642 --allow-unconfigured
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class HermesIntegrationTests {
@@ -39,14 +39,14 @@ public class HermesIntegrationTests {
 					.build()));
 
 		api = HermesApi.builder()
-			.baseUrl("http://127.0.0.1:18789")
+			.baseUrl("http://127.0.0.1:8642")
 			.restClientBuilder(restClientBuilder)
 			.webClientBuilder(webClientBuilder)
 			.build();
 		chatModel = HermesChatModel.builder()
-			.hermesApi(api)
+			.api(api)
 			.defaultOptions(HermesChatOptions.builder()
-				.model(HermesModel.DEFAULT.id())
+				.model(HermesModel.HERMES_AGENT.id())
 				.build())
 			.build();
 	}
@@ -101,7 +101,7 @@ public class HermesIntegrationTests {
 		assertThat(response.model()).isEqualTo("hermes/default");
 		assertThat(response.choices()).hasSize(1);
 		assertThat(response.choices().get(0).message().role()).isEqualTo(Role.ASSISTANT);
-		assertThat(response.choices().get(0).message().content()).containsIgnoringCase("hello");
+		assertThat((String) response.choices().get(0).message().content()).contains("hello");
 		assertThat(response.choices().get(0).finishReason()).isEqualTo("stop");
 
 		// Usage should be present
@@ -180,10 +180,10 @@ public class HermesIntegrationTests {
 			.build();
 
 		// Override backend model via HTTP header
-		var response = api.chat(request, Map.of("x-hermes-model", "deepseek/deepseek-v4-flash"));
+		var response = api.chat(request, Map.of("X-Hermes-Session-Key", "deepseek/deepseek-v4-flash"));
 
 		assertThat(response).isNotNull();
-		assertThat(response.choices().get(0).message().content()).containsIgnoringCase("ok");
+		assertThat((String) response.choices().get(0).message().content()).contains("ok");
 	}
 
 	// ==============================
@@ -194,16 +194,16 @@ public class HermesIntegrationTests {
 	void chatOptionsToHttpHeadersShouldMapCorrectly() {
 		var options = HermesChatOptions.builder()
 			.model("hermes/default")
-			.xOpenclawModel("openai/gpt-5.4")
-			.xOpenclawSessionKey("test-session")
-			.xOpenclawMessageChannel("slack")
+			.hermesSessionKey("openai/gpt-5.4")
+			.hermesSessionKey("test-session")
+			.hermesSessionId("slack")
 			.user("conv:test-123")
 			.build();
 
 		var headers = options.toHttpHeaders();
-		assertThat(headers).containsEntry("x-hermes-model", "openai/gpt-5.4");
-		assertThat(headers).containsEntry("x-hermes-session-key", "test-session");
-		assertThat(headers).containsEntry("x-hermes-message-channel", "slack");
+		assertThat(headers).containsEntry("X-Hermes-Session-Key", "openai/gpt-5.4");
+		assertThat(headers).containsEntry("X-Hermes-Session-Key", "test-session");
+		assertThat(headers).containsEntry("X-Hermes-Session-Id", "slack");
 
 		// user goes in JSON body, not headers
 		assertThat(options.getUser()).isEqualTo("conv:test-123");

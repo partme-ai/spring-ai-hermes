@@ -55,7 +55,6 @@ import org.springframework.ai.model.tool.internal.ToolCallReactiveContextHolder;
 import io.github.partmeai.hermes.api.HermesApi;
 import io.github.partmeai.hermes.api.HermesApi.ChatRequest;
 import io.github.partmeai.hermes.api.HermesApi.Message.Role;
-import io.github.partmeai.hermes.api.HermesApi.Message.ToolCall;
 import io.github.partmeai.hermes.api.HermesChatOptions;
 import io.github.partmeai.hermes.api.HermesModel;
 import io.github.partmeai.hermes.api.common.HermesApiConstants;
@@ -67,22 +66,25 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 /**
- * {@link ChatModel} implementation for Hermes Gateway.
+ * {@link ChatModel} implementation for Hermes API Server.
  * <p>
- * Hermes is an AI agent gateway that exposes OpenAI-compatible
- * {@code /v1/chat/completions} and {@code /v1/embeddings} endpoints.
- * It routes requests to configured agents with support for tool calling,
- * streaming, and session management.
+ * Hermes exposes an OpenAI-compatible endpoint at {@code /v1/chat/completions}.
+ * The {@code model} field is accepted but cosmetic — the actual LLM is
+ * configured server-side. Use {@code hermes-agent} as the default model id.
  * <p>
- * The {@code model} field uses Hermes agent-target routing
- * ({@code hermes/default}, {@code hermes/<agentId>}).
- * Use {@link HermesChatOptions#setXOpenclawModel(String)} to override
- * the backend provider/model for a given agent.
+ * Hermes-specific features:
+ * <ul>
+ *   <li>{@code X-Hermes-Session-Key} — stable per-channel memory scoping</li>
+ *   <li>{@code X-Hermes-Session-Id} — transcript-scoped session identifier</li>
+ *   <li>Inline image support via content array parts</li>
+ *</ul>
  *
  * @author Loong Wan
- * @see <a href="https://docs.hermes.ai/gateway/openai-http-api">Hermes OpenAI HTTP API</a>
+ * @see <a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server">Hermes API Server</a>
  */
 public class HermesChatModel implements ChatModel {
+
+	private static final Logger logger = LoggerFactory.getLogger(HermesChatModel.class);
 
 	private static final ChatModelObservationConvention DEFAULT_OBSERVATION_CONVENTION =
 			new DefaultChatModelObservationConvention();
@@ -91,37 +93,31 @@ public class HermesChatModel implements ChatModel {
 			ToolCallingManager.builder().build();
 
 	private final HermesApi chatApi;
-
 	private final HermesChatOptions defaultOptions;
-
 	private final ObservationRegistry observationRegistry;
-
 	private final ToolCallingManager toolCallingManager;
-
 	private final ToolExecutionEligibilityPredicate toolExecutionEligibilityPredicate;
-
 	private ChatModelObservationConvention observationConvention = DEFAULT_OBSERVATION_CONVENTION;
-
 	private final RetryTemplate retryTemplate;
 
-	public HermesChatModel(HermesApi hermesApi, HermesChatOptions defaultOptions,
+	public HermesChatModel(HermesApi api, HermesChatOptions defaultOptions,
 			ToolCallingManager toolCallingManager, ObservationRegistry observationRegistry) {
-		this(hermesApi, defaultOptions, toolCallingManager, observationRegistry,
+		this(api, defaultOptions, toolCallingManager, observationRegistry,
 				new DefaultToolExecutionEligibilityPredicate(), RetryUtils.DEFAULT_RETRY_TEMPLATE);
 	}
 
-	public HermesChatModel(HermesApi hermesApi, HermesChatOptions defaultOptions,
+	public HermesChatModel(HermesApi api, HermesChatOptions defaultOptions,
 			ToolCallingManager toolCallingManager, ObservationRegistry observationRegistry,
 			ToolExecutionEligibilityPredicate toolExecutionEligibilityPredicate,
 			RetryTemplate retryTemplate) {
 
-		Assert.notNull(hermesApi, "hermesApi must not be null");
+		Assert.notNull(api, "api must not be null");
 		Assert.notNull(defaultOptions, "defaultOptions must not be null");
 		Assert.notNull(toolCallingManager, "toolCallingManager must not be null");
 		Assert.notNull(observationRegistry, "observationRegistry must not be null");
 		Assert.notNull(toolExecutionEligibilityPredicate, "toolExecutionEligibilityPredicate must not be null");
 		Assert.notNull(retryTemplate, "retryTemplate must not be null");
-		this.chatApi = hermesApi;
+		this.chatApi = api;
 		this.defaultOptions = defaultOptions;
 		this.toolCallingManager = toolCallingManager;
 		this.observationRegistry = observationRegistry;
@@ -129,237 +125,145 @@ public class HermesChatModel implements ChatModel {
 		this.retryTemplate = retryTemplate;
 	}
 
-	public static Builder builder() {
-		return new Builder();
-	}
+	public static Builder builder() { return new Builder(); }
 
-	/**
-	 * Build {@link ChatResponseMetadata} from an OpenAI-compatible chat response.
-	 */
 	static ChatResponseMetadata from(HermesApi.ChatResponse response, ChatResponse previousChatResponse) {
 		Assert.notNull(response, "HermesApi.ChatResponse must not be null");
-
 		DefaultUsage newUsage = getDefaultUsage(response);
 		Integer promptTokens = newUsage.getPromptTokens();
 		Integer generationTokens = newUsage.getCompletionTokens();
 		int totalTokens = newUsage.getTotalTokens();
-
 		if (previousChatResponse != null && previousChatResponse.getMetadata() != null
 				&& previousChatResponse.getMetadata().getUsage() != null) {
 			promptTokens += previousChatResponse.getMetadata().getUsage().getPromptTokens();
 			generationTokens += previousChatResponse.getMetadata().getUsage().getCompletionTokens();
 			totalTokens += previousChatResponse.getMetadata().getUsage().getTotalTokens();
 		}
-
 		DefaultUsage aggregatedUsage = new DefaultUsage(promptTokens, generationTokens, totalTokens);
-
 		String finishReason = null;
 		if (response.choices() != null && !response.choices().isEmpty()) {
 			finishReason = response.choices().get(0).finishReason();
 		}
-
-		return ChatResponseMetadata.builder()
-			.usage(aggregatedUsage)
-			.model(response.model())
-			.keyValue("finish_reason", finishReason)
-			.keyValue("id", response.id())
-			.keyValue("created", response.created())
-			.build();
+		return ChatResponseMetadata.builder().usage(aggregatedUsage).model(response.model())
+			.keyValue("finish_reason", finishReason).keyValue("id", response.id()).keyValue("created", response.created()).build();
 	}
 
 	private static DefaultUsage getDefaultUsage(HermesApi.ChatResponse response) {
 		if (response.usage() != null) {
-			return new DefaultUsage(
-				Optional.ofNullable(response.usage().promptTokens()).orElse(0),
+			return new DefaultUsage(Optional.ofNullable(response.usage().promptTokens()).orElse(0),
 				Optional.ofNullable(response.usage().completionTokens()).orElse(0));
 		}
 		return new DefaultUsage(0, 0);
 	}
 
-	/**
-	 * Extract the first choice's message content from an API response.
-	 */
 	private static String getResponseContent(HermesApi.ChatResponse response) {
-		if (response.choices() == null || response.choices().isEmpty()) {
-			return "";
-		}
+		if (response.choices() == null || response.choices().isEmpty()) return "";
 		var choice = response.choices().get(0);
 		HermesApi.Message msg = choice.message() != null ? choice.message() : choice.delta();
-		return msg != null && msg.content() != null ? msg.content() : "";
+		if (msg == null || msg.content() == null) return "";
+		// Content is Object — String or List<ContentPart>
+		if (msg.content() instanceof String s) return s;
+		return msg.content().toString();
 	}
 
-	/**
-	 * Extract tool calls from the first choice of an API response.
-	 */
 	private static List<HermesApi.Message.ToolCall> getResponseToolCalls(HermesApi.ChatResponse response) {
-		if (response.choices() == null || response.choices().isEmpty()) {
-			return List.of();
-		}
+		if (response.choices() == null || response.choices().isEmpty()) return List.of();
 		var choice = response.choices().get(0);
 		HermesApi.Message msg = choice.message() != null ? choice.message() : choice.delta();
-		if (msg == null || msg.toolCalls() == null) {
-			return List.of();
-		}
+		if (msg == null || msg.toolCalls() == null) return List.of();
 		return msg.toolCalls();
 	}
 
 	@Override
 	public ChatResponse call(Prompt prompt) {
-		Prompt requestPrompt = buildRequestPrompt(prompt);
-		return this.internalCall(requestPrompt, null);
+		return internalCall(buildRequestPrompt(prompt), null);
 	}
 
 	private ChatResponse internalCall(Prompt prompt, ChatResponse previousChatResponse) {
-
-		HermesApi.ChatRequest request = hermesChatRequest(prompt, false);
+		HermesApi.ChatRequest request = openclawChatRequest(prompt, false);
 		Map<String, String> headers = hermesHttpHeaders(prompt);
 
 		ChatModelObservationContext observationContext = ChatModelObservationContext.builder()
-			.prompt(prompt)
-			.provider(HermesApiConstants.PROVIDER_NAME)
-			.build();
+			.prompt(prompt).provider(HermesApiConstants.PROVIDER_NAME).build();
 
 		ChatResponse response = ChatModelObservationDocumentation.CHAT_MODEL_OPERATION
 			.observation(this.observationConvention, DEFAULT_OBSERVATION_CONVENTION,
 					() -> observationContext, this.observationRegistry)
 			.observe(() -> {
-
-				HermesApi.ChatResponse hermesResponse =
-						this.retryTemplate.execute(ctx -> this.chatApi.chat(request, headers));
-
-				List<AssistantMessage.ToolCall> toolCalls = getResponseToolCalls(hermesResponse)
-					.stream()
-					.map(toolCall -> new AssistantMessage.ToolCall(toolCall.id(),
-							toolCall.type() != null ? toolCall.type() : "function",
-							toolCall.function().name(), toolCall.function().arguments()))
+				HermesApi.ChatResponse apiResp = this.retryTemplate.execute(ctx -> this.chatApi.chat(request, headers));
+				List<AssistantMessage.ToolCall> toolCalls = getResponseToolCalls(apiResp).stream()
+					.map(tc -> new AssistantMessage.ToolCall(tc.id(),
+						tc.type() != null ? tc.type() : "function", tc.function().name(), tc.function().arguments()))
 					.toList();
-
 				var assistantMessage = AssistantMessage.builder()
-					.content(getResponseContent(hermesResponse))
-					.properties(Map.of())
-					.toolCalls(toolCalls)
-					.build();
-
+					.content(getResponseContent(apiResp)).properties(Map.of()).toolCalls(toolCalls).build();
 				String finishReason = null;
-				if (hermesResponse.choices() != null && !hermesResponse.choices().isEmpty()) {
-					finishReason = hermesResponse.choices().get(0).finishReason();
-				}
-
-				ChatGenerationMetadata generationMetadata = ChatGenerationMetadata.builder()
-					.finishReason(finishReason)
-					.build();
-
-				var generator = new Generation(assistantMessage, generationMetadata);
-				ChatResponse chatResponse = new ChatResponse(List.of(generator),
-						from(hermesResponse, previousChatResponse));
-
-				observationContext.setResponse(chatResponse);
-				return chatResponse;
+				if (apiResp.choices() != null && !apiResp.choices().isEmpty())
+					finishReason = apiResp.choices().get(0).finishReason();
+				var genMeta = ChatGenerationMetadata.builder().finishReason(finishReason).build();
+				var generator = new Generation(assistantMessage, genMeta);
+				ChatResponse cr = new ChatResponse(List.of(generator), from(apiResp, previousChatResponse));
+				observationContext.setResponse(cr);
+				return cr;
 			});
 
 		if (this.toolExecutionEligibilityPredicate.isToolExecutionRequired(prompt.getOptions(), response)) {
-			var toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response);
-			if (toolExecutionResult.returnDirect()) {
-				return ChatResponse.builder()
-					.from(response)
-					.generations(ToolExecutionResult.buildGenerations(toolExecutionResult))
-					.build();
+			var result = this.toolCallingManager.executeToolCalls(prompt, response);
+			if (result.returnDirect()) {
+				return ChatResponse.builder().from(response).generations(ToolExecutionResult.buildGenerations(result)).build();
 			}
-			else {
-				return this.internalCall(
-						new Prompt(toolExecutionResult.conversationHistory(), prompt.getOptions()), response);
-			}
+			return internalCall(new Prompt(result.conversationHistory(), prompt.getOptions()), response);
 		}
-
 		return response;
 	}
 
 	@Override
 	public Flux<ChatResponse> stream(Prompt prompt) {
-		Prompt requestPrompt = buildRequestPrompt(prompt);
-		return this.internalStream(requestPrompt, null);
+		return internalStream(buildRequestPrompt(prompt), null);
 	}
 
 	private Flux<ChatResponse> internalStream(Prompt prompt, ChatResponse previousChatResponse) {
 		return Flux.deferContextual(contextView -> {
-			HermesApi.ChatRequest request = hermesChatRequest(prompt, true);
+			HermesApi.ChatRequest request = openclawChatRequest(prompt, true);
 			Map<String, String> headers = hermesHttpHeaders(prompt);
 
 			final ChatModelObservationContext observationContext = ChatModelObservationContext.builder()
-				.prompt(prompt)
-				.provider(HermesApiConstants.PROVIDER_NAME)
-				.build();
+				.prompt(prompt).provider(HermesApiConstants.PROVIDER_NAME).build();
 
 			Observation observation = ChatModelObservationDocumentation.CHAT_MODEL_OPERATION.observation(
-					this.observationConvention, DEFAULT_OBSERVATION_CONVENTION,
-					() -> observationContext, this.observationRegistry);
+				this.observationConvention, DEFAULT_OBSERVATION_CONVENTION, () -> observationContext, this.observationRegistry);
+			observation.parentObservation(contextView.getOrDefault(ObservationThreadLocalAccessor.KEY, null)).start();
 
-			observation.parentObservation(contextView.getOrDefault(
-					ObservationThreadLocalAccessor.KEY, null)).start();
+			Flux<HermesApi.ChatResponse> apiFlux = this.chatApi.streamingChat(request, headers);
 
-			Flux<HermesApi.ChatResponse> hermesResponse =
-					this.chatApi.streamingChat(request, headers);
-
-			Flux<ChatResponse> chatResponse = hermesResponse.map(chunk -> {
+			Flux<ChatResponse> chatResponse = apiFlux.map(chunk -> {
 				String content = getResponseContent(chunk);
-
-				List<AssistantMessage.ToolCall> toolCalls = getResponseToolCalls(chunk)
-					.stream()
-					.map(toolCall -> new AssistantMessage.ToolCall(toolCall.id(),
-							toolCall.type() != null ? toolCall.type() : "function",
-							toolCall.function().name(), toolCall.function().arguments()))
+				List<AssistantMessage.ToolCall> toolCalls = getResponseToolCalls(chunk).stream()
+					.map(tc -> new AssistantMessage.ToolCall(tc.id(),
+						tc.type() != null ? tc.type() : "function", tc.function().name(), tc.function().arguments()))
 					.toList();
-
-				var assistantMessage = AssistantMessage.builder()
-					.content(content)
-					.properties(Map.of())
-					.toolCalls(toolCalls)
-					.build();
-
+				var msg = AssistantMessage.builder().content(content).properties(Map.of()).toolCalls(toolCalls).build();
 				String finishReason = null;
-				if (chunk.choices() != null && !chunk.choices().isEmpty()) {
+				if (chunk.choices() != null && !chunk.choices().isEmpty())
 					finishReason = chunk.choices().get(0).finishReason();
-				}
-
-				ChatGenerationMetadata generationMetadata = ChatGenerationMetadata.builder()
-					.finishReason(finishReason)
-					.build();
-
-				var generator = new Generation(assistantMessage, generationMetadata);
-				return new ChatResponse(List.of(generator), from(chunk, previousChatResponse));
+				var genMeta = ChatGenerationMetadata.builder().finishReason(finishReason).build();
+				return new ChatResponse(List.of(new Generation(msg, genMeta)), from(chunk, previousChatResponse));
 			});
 
 			Flux<ChatResponse> chatResponseFlux = chatResponse.flatMap(response -> {
-				if (this.toolExecutionEligibilityPredicate.isToolExecutionRequired(
-						prompt.getOptions(), response)) {
+				if (this.toolExecutionEligibilityPredicate.isToolExecutionRequired(prompt.getOptions(), response)) {
 					return Flux.deferContextual(ctx -> {
 						ToolExecutionResult toolExecutionResult;
-						try {
-							ToolCallReactiveContextHolder.setContext(ctx);
-							toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response);
-						}
-						finally {
-							ToolCallReactiveContextHolder.clearContext();
-						}
-						if (toolExecutionResult.returnDirect()) {
-							return Flux.just(ChatResponse.builder().from(response)
-								.generations(ToolExecutionResult.buildGenerations(toolExecutionResult))
-								.build());
-						}
-						else {
-							return this.internalStream(
-								new Prompt(toolExecutionResult.conversationHistory(),
-										prompt.getOptions()), response);
-						}
+						try { ToolCallReactiveContextHolder.setContext(ctx); toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response); }
+						finally { ToolCallReactiveContextHolder.clearContext(); }
+						if (toolExecutionResult.returnDirect())
+							return Flux.just(ChatResponse.builder().from(response).generations(ToolExecutionResult.buildGenerations(toolExecutionResult)).build());
+						return this.internalStream(new Prompt(toolExecutionResult.conversationHistory(), prompt.getOptions()), response);
 					}).subscribeOn(Schedulers.boundedElastic());
 				}
-				else {
-					return Flux.just(response);
-				}
-			})
-			.doOnError(observation::error)
-			.doFinally(s -> observation.stop())
-			.contextWrite(ctx -> ctx.put(ObservationThreadLocalAccessor.KEY, observation));
+				return Flux.just(response);
+			}).doOnError(observation::error).doFinally(s -> observation.stop())
+				.contextWrite(ctx -> ctx.put(ObservationThreadLocalAccessor.KEY, observation));
 
 			return new MessageAggregator().aggregate(chatResponseFlux, observationContext::setResponse);
 		});
@@ -368,225 +272,113 @@ public class HermesChatModel implements ChatModel {
 	Prompt buildRequestPrompt(Prompt prompt) {
 		HermesChatOptions runtimeOptions = null;
 		if (prompt.getOptions() != null) {
-			if (prompt.getOptions() instanceof HermesChatOptions ocOpts) {
-				runtimeOptions = ModelOptionsUtils.copyToTarget(
-						HermesChatOptions.fromOptions(ocOpts),
-						HermesChatOptions.class, HermesChatOptions.class);
-			}
-			else if (prompt.getOptions() instanceof ToolCallingChatOptions tcOpts) {
-				runtimeOptions = ModelOptionsUtils.copyToTarget(tcOpts,
-						ToolCallingChatOptions.class, HermesChatOptions.class);
-			}
-			else {
-				runtimeOptions = ModelOptionsUtils.copyToTarget(prompt.getOptions(),
-						ChatOptions.class, HermesChatOptions.class);
+			if (prompt.getOptions() instanceof HermesChatOptions ho) {
+				runtimeOptions = ModelOptionsUtils.copyToTarget(HermesChatOptions.fromOptions(ho), HermesChatOptions.class, HermesChatOptions.class);
+			} else if (prompt.getOptions() instanceof ToolCallingChatOptions tc) {
+				runtimeOptions = ModelOptionsUtils.copyToTarget(tc, ToolCallingChatOptions.class, HermesChatOptions.class);
+			} else {
+				runtimeOptions = ModelOptionsUtils.copyToTarget(prompt.getOptions(), ChatOptions.class, HermesChatOptions.class);
 			}
 		}
-
-		HermesChatOptions requestOptions = ModelOptionsUtils.merge(
-				runtimeOptions, this.defaultOptions, HermesChatOptions.class);
-
+		HermesChatOptions requestOptions = ModelOptionsUtils.merge(runtimeOptions, this.defaultOptions, HermesChatOptions.class);
 		if (runtimeOptions != null) {
-			requestOptions.setInternalToolExecutionEnabled(ModelOptionsUtils.mergeOption(
-				runtimeOptions.getInternalToolExecutionEnabled(),
-				this.defaultOptions.getInternalToolExecutionEnabled()));
-			requestOptions.setToolNames(ToolCallingChatOptions.mergeToolNames(
-				runtimeOptions.getToolNames(), this.defaultOptions.getToolNames()));
-			requestOptions.setToolCallbacks(ToolCallingChatOptions.mergeToolCallbacks(
-				runtimeOptions.getToolCallbacks(), this.defaultOptions.getToolCallbacks()));
-			requestOptions.setToolContext(ToolCallingChatOptions.mergeToolContext(
-				runtimeOptions.getToolContext(), this.defaultOptions.getToolContext()));
-		}
-		else {
-			requestOptions.setInternalToolExecutionEnabled(
-					this.defaultOptions.getInternalToolExecutionEnabled());
+			requestOptions.setInternalToolExecutionEnabled(ModelOptionsUtils.mergeOption(runtimeOptions.getInternalToolExecutionEnabled(), this.defaultOptions.getInternalToolExecutionEnabled()));
+			requestOptions.setToolNames(ToolCallingChatOptions.mergeToolNames(runtimeOptions.getToolNames(), this.defaultOptions.getToolNames()));
+			requestOptions.setToolCallbacks(ToolCallingChatOptions.mergeToolCallbacks(runtimeOptions.getToolCallbacks(), this.defaultOptions.getToolCallbacks()));
+			requestOptions.setToolContext(ToolCallingChatOptions.mergeToolContext(runtimeOptions.getToolContext(), this.defaultOptions.getToolContext()));
+		} else {
+			requestOptions.setInternalToolExecutionEnabled(this.defaultOptions.getInternalToolExecutionEnabled());
 			requestOptions.setToolNames(this.defaultOptions.getToolNames());
 			requestOptions.setToolCallbacks(this.defaultOptions.getToolCallbacks());
 			requestOptions.setToolContext(this.defaultOptions.getToolContext());
 		}
-
-		if (!StringUtils.hasText(requestOptions.getModel())) {
-			throw new IllegalArgumentException("model cannot be null or empty");
-		}
-
+		if (!StringUtils.hasText(requestOptions.getModel())) throw new IllegalArgumentException("model cannot be null or empty");
 		ToolCallingChatOptions.validateToolCallbacks(requestOptions.getToolCallbacks());
 		return new Prompt(prompt.getInstructions(), requestOptions);
 	}
 
-	/**
-	 * Package access for testing.
-	 */
-	HermesApi.ChatRequest hermesChatRequest(Prompt prompt, boolean stream) {
-
-		List<HermesApi.Message> hermesMessages = prompt.getInstructions().stream()
-			.flatMap(message -> {
-				if (message.getMessageType() == MessageType.SYSTEM) {
-					return List.of(HermesApi.Message.builder(Role.SYSTEM)
-						.content(message.getText()).build()).stream();
+	HermesApi.ChatRequest openclawChatRequest(Prompt prompt, boolean stream) {
+		List<HermesApi.Message> messages = prompt.getInstructions().stream().flatMap(msg -> {
+			if (msg.getMessageType() == MessageType.SYSTEM) {
+				return List.of(HermesApi.Message.builder(Role.SYSTEM).content(msg.getText()).build()).stream();
+			} else if (msg.getMessageType() == MessageType.USER) {
+				return List.of(HermesApi.Message.builder(Role.USER).content(msg.getText()).build()).stream();
+			} else if (msg.getMessageType() == MessageType.ASSISTANT) {
+				var am = (AssistantMessage) msg;
+				List<HermesApi.Message.ToolCall> tcs = null;
+				if (!CollectionUtils.isEmpty(am.getToolCalls())) {
+					tcs = am.getToolCalls().stream().map(tc -> {
+						var fn = new HermesApi.Message.ToolCallFunction(tc.name(), tc.arguments());
+						return new HermesApi.Message.ToolCall(tc.id(), "function", fn);
+					}).toList();
 				}
-				else if (message.getMessageType() == MessageType.USER) {
-					var builder = HermesApi.Message.builder(Role.USER)
-						.content(message.getText());
-					return List.of(builder.build()).stream();
-				}
-				else if (message.getMessageType() == MessageType.ASSISTANT) {
-					var assistantMessage = (AssistantMessage) message;
-					List<HermesApi.Message.ToolCall> toolCalls = null;
-					if (!CollectionUtils.isEmpty(assistantMessage.getToolCalls())) {
-						toolCalls = assistantMessage.getToolCalls().stream()
-							.map(toolCall -> {
-								var function = new HermesApi.Message.ToolCallFunction(
-										toolCall.name(), toolCall.arguments());
-								return new HermesApi.Message.ToolCall(
-										toolCall.id(), "function", function);
-							}).toList();
-					}
-					return List.of(HermesApi.Message.builder(Role.ASSISTANT)
-						.content(assistantMessage.getText())
-						.toolCalls(toolCalls)
-						.build()).stream();
-				}
-				else if (message.getMessageType() == MessageType.TOOL) {
-					ToolResponseMessage toolMessage = (ToolResponseMessage) message;
-					return toolMessage.getResponses().stream()
-						.map(tr -> HermesApi.Message.builder(Role.TOOL)
-							.content(tr.responseData())
-							.toolCallId(tr.id())
-							.name(tr.name())
-							.build());
-				}
-				throw new IllegalArgumentException("Unsupported message type: "
-						+ message.getMessageType());
-			}).toList();
+				return List.of(HermesApi.Message.builder(Role.ASSISTANT).content(am.getText()).toolCalls(tcs).build()).stream();
+			} else if (msg.getMessageType() == MessageType.TOOL) {
+				var tm = (ToolResponseMessage) msg;
+				return tm.getResponses().stream().map(tr ->
+					HermesApi.Message.builder(Role.TOOL).content(tr.responseData()).toolCallId(tr.id()).name(tr.name()).build());
+			}
+			throw new IllegalArgumentException("Unsupported message type: " + msg.getMessageType());
+		}).toList();
 
 		HermesChatOptions requestOptions;
-		if (prompt.getOptions() instanceof HermesChatOptions ocOpts) {
-			requestOptions = ocOpts;
-		}
-		else {
-			requestOptions = HermesChatOptions.fromOptions(
-					(HermesChatOptions) prompt.getOptions());
+		if (prompt.getOptions() instanceof HermesChatOptions ho) {
+			requestOptions = ho;
+		} else {
+			requestOptions = HermesChatOptions.fromOptions((HermesChatOptions) prompt.getOptions());
 		}
 
-		HermesApi.ChatRequest.Builder requestBuilder = HermesApi.ChatRequest
-			.builder(requestOptions.getModel())
-			.stream(stream)
-			.messages(hermesMessages)
-			.temperature(requestOptions.getTemperature())
-			.topP(requestOptions.getTopP())
-			.frequencyPenalty(requestOptions.getFrequencyPenalty())
-			.presencePenalty(requestOptions.getPresencePenalty())
+		HermesApi.ChatRequest.Builder b = HermesApi.ChatRequest.builder(requestOptions.getModel()).stream(stream)
+			.messages(messages).temperature(requestOptions.getTemperature()).topP(requestOptions.getTopP())
+			.frequencyPenalty(requestOptions.getFrequencyPenalty()).presencePenalty(requestOptions.getPresencePenalty())
 			.seed(requestOptions.getSeed());
 
-		if (requestOptions.getMaxTokens() != null) {
-			requestBuilder.maxCompletionTokens(requestOptions.getMaxTokens());
-		}
+		if (requestOptions.getMaxTokens() != null) b.maxCompletionTokens(requestOptions.getMaxTokens());
+		if (requestOptions.getStop() != null && !requestOptions.getStop().isEmpty()) b.stop(requestOptions.getStop());
+		if (requestOptions.getUser() != null) b.user(requestOptions.getUser());
 
-		if (requestOptions.getStop() != null && !requestOptions.getStop().isEmpty()) {
-			requestBuilder.stop(requestOptions.getStop());
+		List<ToolDefinition> toolDefs = this.toolCallingManager.resolveToolDefinitions(requestOptions);
+		if (!CollectionUtils.isEmpty(toolDefs)) {
+			b.tools(toolDefs.stream().map(td -> {
+				var fn = new ChatRequest.Tool.Function(td.name(), td.description(), ModelOptionsUtils.jsonToMap(td.inputSchema()));
+				return new ChatRequest.Tool(fn);
+			}).toList());
 		}
-
-		if (requestOptions.getUser() != null) {
-			requestBuilder.user(requestOptions.getUser());
-		}
-
-		List<ToolDefinition> toolDefinitions = this.toolCallingManager
-				.resolveToolDefinitions(requestOptions);
-		if (!CollectionUtils.isEmpty(toolDefinitions)) {
-			requestBuilder.tools(getTools(toolDefinitions));
-		}
-
-		return requestBuilder.build();
+		return b.build();
 	}
 
-	/**
-	 * Extract x-hermes-* HTTP headers from prompt options.
-	 */
 	private Map<String, String> hermesHttpHeaders(Prompt prompt) {
-		if (prompt.getOptions() instanceof HermesChatOptions ocOpts) {
-			return ocOpts.toHttpHeaders();
-		}
+		if (prompt.getOptions() instanceof HermesChatOptions ho) return ho.toHttpHeaders();
 		return Map.of();
 	}
 
-	private List<ChatRequest.Tool> getTools(List<ToolDefinition> toolDefinitions) {
-		return toolDefinitions.stream().map(toolDefinition -> {
-			var function = new ChatRequest.Tool.Function(
-					toolDefinition.name(), toolDefinition.description(),
-					ModelOptionsUtils.jsonToMap(toolDefinition.inputSchema()));
-			return new ChatRequest.Tool(function);
-		}).toList();
-	}
-
 	@Override
-	public ChatOptions getDefaultOptions() {
-		return HermesChatOptions.fromOptions(this.defaultOptions);
-	}
+	public ChatOptions getDefaultOptions() { return HermesChatOptions.fromOptions(this.defaultOptions); }
 
-	public void setObservationConvention(ChatModelObservationConvention observationConvention) {
-		Assert.notNull(observationConvention, "observationConvention cannot be null");
-		this.observationConvention = observationConvention;
+	public void setObservationConvention(ChatModelObservationConvention c) {
+		Assert.notNull(c, "observationConvention cannot be null"); this.observationConvention = c;
 	}
 
 	public static final class Builder {
-
-		private HermesApi hermesApi;
-
-		private HermesChatOptions defaultOptions = HermesChatOptions.builder()
-				.model(HermesModel.DEFAULT.id()).build();
-
+		private HermesApi api;
+		private HermesChatOptions defaultOptions = HermesChatOptions.builder().model(HermesModel.HERMES_AGENT.id()).build();
 		private ToolCallingManager toolCallingManager;
-
-		private ToolExecutionEligibilityPredicate toolExecutionEligibilityPredicate =
-				new DefaultToolExecutionEligibilityPredicate();
-
+		private ToolExecutionEligibilityPredicate toolExecutionEligibilityPredicate = new DefaultToolExecutionEligibilityPredicate();
 		private ObservationRegistry observationRegistry = ObservationRegistry.NOOP;
-
 		private RetryTemplate retryTemplate = RetryUtils.DEFAULT_RETRY_TEMPLATE;
 
-		private Builder() {
-		}
-
-		public Builder hermesApi(HermesApi hermesApi) {
-			this.hermesApi = hermesApi;
-			return this;
-		}
-
-		public Builder defaultOptions(HermesChatOptions defaultOptions) {
-			this.defaultOptions = defaultOptions;
-			return this;
-		}
-
-		public Builder toolCallingManager(ToolCallingManager toolCallingManager) {
-			this.toolCallingManager = toolCallingManager;
-			return this;
-		}
-
-		public Builder toolExecutionEligibilityPredicate(
-				ToolExecutionEligibilityPredicate toolExecutionEligibilityPredicate) {
-			this.toolExecutionEligibilityPredicate = toolExecutionEligibilityPredicate;
-			return this;
-		}
-
-		public Builder observationRegistry(ObservationRegistry observationRegistry) {
-			this.observationRegistry = observationRegistry;
-			return this;
-		}
-
-		public Builder retryTemplate(RetryTemplate retryTemplate) {
-			this.retryTemplate = retryTemplate;
-			return this;
-		}
+		private Builder() {}
+		public Builder api(HermesApi v) { api = v; return this; }
+		public Builder defaultOptions(HermesChatOptions v) { defaultOptions = v; return this; }
+		public Builder toolCallingManager(ToolCallingManager v) { toolCallingManager = v; return this; }
+		public Builder toolExecutionEligibilityPredicate(ToolExecutionEligibilityPredicate v) { toolExecutionEligibilityPredicate = v; return this; }
+		public Builder observationRegistry(ObservationRegistry v) { observationRegistry = v; return this; }
+		public Builder retryTemplate(RetryTemplate v) { retryTemplate = v; return this; }
 
 		public HermesChatModel build() {
-			if (this.toolCallingManager != null) {
-				return new HermesChatModel(this.hermesApi, this.defaultOptions,
-						this.toolCallingManager, this.observationRegistry,
-						this.toolExecutionEligibilityPredicate, this.retryTemplate);
-			}
-			return new HermesChatModel(this.hermesApi, this.defaultOptions,
-					DEFAULT_TOOL_CALLING_MANAGER, this.observationRegistry,
-					this.toolExecutionEligibilityPredicate, this.retryTemplate);
+			if (toolCallingManager != null)
+				return new HermesChatModel(api, defaultOptions, toolCallingManager, observationRegistry, toolExecutionEligibilityPredicate, retryTemplate);
+			return new HermesChatModel(api, defaultOptions, DEFAULT_TOOL_CALLING_MANAGER, observationRegistry, toolExecutionEligibilityPredicate, retryTemplate);
 		}
 	}
 }

@@ -28,57 +28,35 @@ import io.github.partmeai.hermes.api.HermesApi.Message;
  */
 public final class HermesApiHelper {
 
-	private HermesApiHelper() {
-		throw new UnsupportedOperationException("This is a utility class and cannot be instantiated");
-	}
+	private HermesApiHelper() { throw new UnsupportedOperationException("Utility class"); }
 
-	/**
-	 * Check if a streaming chunk contains tool calls in its delta.
-	 */
-	public static boolean isStreamingToolCall(ChatResponse chatResponse) {
-		if (chatResponse == null || chatResponse.choices() == null
-				|| chatResponse.choices().isEmpty()) {
-			return false;
-		}
-		var delta = chatResponse.choices().get(0).delta();
+	public static boolean isStreamingToolCall(ChatResponse r) {
+		if (r == null || r.choices() == null || r.choices().isEmpty()) return false;
+		var delta = r.choices().get(0).delta();
 		return delta != null && delta.toolCalls() != null && !delta.toolCalls().isEmpty();
 	}
 
-	/**
-	 * Check if a streaming chunk is the final chunk (has a finish_reason).
-	 */
-	public static boolean isStreamingDone(ChatResponse chatResponse) {
-		if (chatResponse == null || chatResponse.choices() == null
-				|| chatResponse.choices().isEmpty()) {
-			return false;
-		}
-		return chatResponse.choices().get(0).finishReason() != null;
+	public static boolean isStreamingDone(ChatResponse r) {
+		if (r == null || r.choices() == null || r.choices().isEmpty()) return false;
+		return r.choices().get(0).finishReason() != null;
 	}
 
-	/**
-	 * Extract content from the first choice's message (non-streaming) or delta (streaming).
-	 */
-	public static String getContent(ChatResponse response) {
-		if (response == null || response.choices() == null || response.choices().isEmpty()) {
-			return null;
-		}
-		var choice = response.choices().get(0);
+	/** Extract content from the first choice's message (non-streaming) or delta (streaming). */
+	public static String getContent(ChatResponse r) {
+		if (r == null || r.choices() == null || r.choices().isEmpty()) return null;
+		var choice = r.choices().get(0);
 		Message msg = choice.message() != null ? choice.message() : choice.delta();
-		return msg != null ? msg.content() : null;
+		if (msg == null || msg.content() == null) return null;
+		if (msg.content() instanceof String s) return s;
+		return msg.content().toString();
 	}
 
-	/**
-	 * Extract tool calls from the first choice's message or delta.
-	 */
-	public static List<Message.ToolCall> getToolCalls(ChatResponse response) {
-		if (response == null || response.choices() == null || response.choices().isEmpty()) {
-			return List.of();
-		}
-		var choice = response.choices().get(0);
+	/** Extract tool calls from the first choice's message or delta. */
+	public static List<Message.ToolCall> getToolCalls(ChatResponse r) {
+		if (r == null || r.choices() == null || r.choices().isEmpty()) return List.of();
+		var choice = r.choices().get(0);
 		Message msg = choice.message() != null ? choice.message() : choice.delta();
-		if (msg == null || msg.toolCalls() == null) {
-			return List.of();
-		}
+		if (msg == null || msg.toolCalls() == null) return List.of();
 		return msg.toolCalls();
 	}
 }

@@ -1,14 +1,14 @@
 # spring-ai-hermes
 
-Spring AI 模型集成：将 Hermes Gateway 桥接到 Spring AI 的 `ChatModel` 和 `EmbeddingModel` 接口。
+Spring AI 模型集成：将 Hermes API Server 桥接到 Spring AI 的 `ChatModel` 接口。
 
-通过 Hermes Gateway 的 OpenAI 兼容端点实现：
+通过 Hermes API Server 的 OpenAI 兼容端点实现：
 
 - `POST /v1/chat/completions` → `ChatModel`（流式 + 非流式）
-- `POST /v1/embeddings` → `EmbeddingModel`
-- `GET /v1/models` → 模型列表
-- `GET /v1/models/{id}` → 单个模型信息
-- `POST /v1/responses` → OpenAI Responses API
+- `POST /v1/responses` → Responses API（对话状态持久化）
+- `GET /v1/models` → 模型发现
+- `POST /v1/runs` → Runs API（长会话流式执行）
+- `GET /health` + `/v1/capabilities` → 健康检查与能力发现
 
 ## 快速开始
 
@@ -16,9 +16,9 @@ Spring AI 模型集成：将 Hermes Gateway 桥接到 Spring AI 的 `ChatModel` 
 
 ```xml
 <dependency>
-    <groupId>io.github.hiwepy</groupId>
+    <groupId>io.github.partmeai</groupId>
     <artifactId>spring-ai-hermes</artifactId>
-    <version>2.7.x.20260527-SNAPSHOT</version>
+    <version>3.5.x.20260612-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -28,12 +28,12 @@ Spring AI 模型集成：将 Hermes Gateway 桥接到 Spring AI 的 `ChatModel` 
 spring:
   ai:
     hermes:
-      base-url: http://localhost:18789
-      gateway-auth-token: your-gateway-token
-      model: hermes/default
+      base-url: http://localhost:8642
+      api-server-key: your-api-key
+      model: hermes-agent
 ```
 
-**认证说明：** 需要在 `RestClient.Builder` 和 `WebClient.Builder` 中手动配置 `Authorization: Bearer <token>` 请求头。参考下方代码示例。
+> **认证说明：** 需要在 `RestClient.Builder` 和 `WebClient.Builder` 中手动配置 `Authorization: Bearer <key>` 请求头。
 
 ### 3. 注入使用
 
@@ -63,84 +63,66 @@ public class ChatController {
 
 ## Hermes 特有功能
 
-### Agent 目标路由
+### 模型（纯展示性）
 
-Hermes 将 `model` 字段解释为 agent 目标，而非原始模型 ID：
-
-```java
-// 使用默认 agent
-HermesChatOptions options = HermesChatOptions.builder()
-    .model("hermes/default")
-    .build();
-
-// 使用指定 agent
-HermesChatOptions options = HermesChatOptions.builder()
-    .model("hermes/research")
-    .build();
-```
-
-### 覆盖后端模型
-
-通过 `x-hermes-model` HTTP 请求头覆盖 agent 使用的后端模型：
+Hermes 的 `model` 字段被接受但不影响实际 LLM 选择——模型在服务端配置：
 
 ```java
 HermesChatOptions options = HermesChatOptions.builder()
-    .model("hermes/default")
-    .xOpenclawModel("openai/gpt-5.4")  // → HTTP 请求头: x-hermes-model
+    .model("hermes-agent")  // 默认模型 ID
     .build();
 ```
 
-### 会话路由
+### 会话与记忆
 
 ```java
-// 通过 user 字段派生稳定 session key（作为 JSON 请求体字段发送）
+// 长期记忆作用域（max 256 字符）
 HermesChatOptions options = HermesChatOptions.builder()
-    .model("hermes/default")
-    .user("conv:my-conversation-id")
+    .model("hermes-agent")
+    .hermesSessionKey("agent:main:webui:dm:user-42")   // → X-Hermes-Session-Key
     .build();
 
-// 通过 x-hermes-session-key 请求头显式控制
+// 对话级别的会话标识
 HermesChatOptions options = HermesChatOptions.builder()
-    .model("hermes/default")
-    .xOpenclawSessionKey("my-session-key")  // → HTTP 请求头: x-hermes-session-key
+    .model("hermes-agent")
+    .hermesSessionId("transcript-alpha")                // → X-Hermes-Session-Id
     .build();
 ```
 
-### 通道上下文
+### 内联图片
+
+用户消息的 `content` 支持数组格式（文本 + 图片）：
 
 ```java
-HermesChatOptions options = HermesChatOptions.builder()
-    .model("hermes/default")
-    .xOpenclawMessageChannel("slack")  // → HTTP 请求头: x-hermes-message-channel
+var content = List.of(
+    new HermesApi.Message.ContentPart("text", "这是什么？", null),
+    new HermesApi.Message.ContentPart("image_url", null,
+        new HermesApi.Message.ImageUrl("https://example.com/cat.png", "high"))
+);
+
+var msg = HermesApi.Message.builder(HermesApi.Message.Role.USER)
+    .content(content)
     .build();
 ```
 
-### 标准 OpenAI 采样参数
+### Responses API（对话状态持久化）
 
 ```java
-HermesChatOptions options = HermesChatOptions.builder()
-    .model("hermes/default")
-    .temperature(0.7)
-    .topP(0.9)
-    .frequencyPenalty(0.5)
-    .presencePenalty(0.3)
-    .seed(42)
-    .stop(List.of("END"))
-    .maxTokens(2048)  // → JSON 请求体: max_completion_tokens
-    .build();
+// 创建带服务端状态的对话
+var req = new HermesApi.ResponseRequest("hermes-agent",
+    "What files are in my project?", "You are a coding assistant.",
+    null, null, true);
+var resp = api.responses(req);
+
+// 多轮对话：previous_response_id 保持上下文
+var req2 = new HermesApi.ResponseRequest("hermes-agent",
+    "Show me the README", null, resp.id(), null, null);
+var resp2 = api.responses(req2);
+
+// 或使用 conversation 参数自动链式
+var req3 = new HermesApi.ResponseRequest("hermes-agent",
+    "Run the tests", null, null, "my-project", null);
 ```
-
-## 配置属性
-
-| 属性 | 默认值 | 说明 |
-|------|--------|------|
-| `spring.ai.hermes.base-url` | `http://localhost:18789` | Gateway HTTP 根地址 |
-| `spring.ai.hermes.gateway-auth-token` | | 控制面认证令牌 (`gateway.auth.token`) |
-| `spring.ai.hermes.gateway-auth-password` | | 控制面密码 (`gateway.auth.password`) |
-| `spring.ai.hermes.model` | `hermes/default` | 默认 agent 目标模型 |
-| `spring.ai.hermes.connect-timeout-millis` | `15000` | 连接超时 |
-| `spring.ai.hermes.read-timeout-millis` | `120000` | 读取超时 |
-| `spring.ai.hermes.verify-ssl` | `true` | 是否校验 HTTPS 证书 |
 
 ## API 参考
 
@@ -148,51 +130,49 @@ HermesChatOptions options = HermesChatOptions.builder()
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `model` | String | Agent 目标 ID（如 `hermes/default`） |
+| `model` | String | 展示性模型 ID（`hermes-agent`），实际 LLM 服务端配置 |
 | `messages` | List\<Message\> | 对话消息列表 |
-| `stream` | Boolean | 是否启用 SSE 流式响应 |
-| `tools` | List\<Tool\> | 工具定义列表 |
-| `tool_choice` | Object | 工具选择策略（`"auto"`/`"none"`/`"required"` 等） |
+| `stream` | Boolean | SSE 流式响应 |
+| `tools` | List\<Tool\> | 工具定义 |
 | `max_completion_tokens` | Integer | 最大输出 token 数 |
-| `temperature` | Double | 采样温度 (0.0–2.0) |
+| `temperature` | Double | 采样温度 |
 | `top_p` | Double | 核采样概率 |
-| `frequency_penalty` | Double | 频率惩罚 (-2.0–2.0) |
-| `presence_penalty` | Double | 存在惩罚 (-2.0–2.0) |
+| `frequency_penalty` | Double | 频率惩罚 |
+| `presence_penalty` | Double | 存在惩罚 |
 | `seed` | Integer | 随机种子 |
-| `stop` | Object | 停止序列（String 或 List\<String\>，最多 4 个） |
-| `user` | String | 用户标识，用于派生稳定会话 key |
+| `stop` | Object | 停止序列 |
+| `user` | String | 用户标识 |
 
-### HTTP 请求头（Hermes 特有）
+### HTTP 请求头
 
-| 请求头 | 对应 Builder 方法 | 说明 |
-|--------|-----------------|------|
-| `x-hermes-model` | `.xOpenclawModel(...)` | 覆盖 agent 的后端 provider/model |
-| `x-hermes-session-key` | `.xOpenclawSessionKey(...)` | 显式会话路由 key |
-| `x-hermes-message-channel` | `.xOpenclawMessageChannel(...)` | 综合通道上下文（如 `"slack"`） |
-| `x-hermes-agent-id` | `.xOpenclawAgentId(...)` | 兼容性 agent-id 覆盖 |
+| 请求头 | Builder | 说明 |
+|--------|---------|------|
+| `X-Hermes-Session-Key` | `.hermesSessionKey(...)` | 长期记忆作用域（max 256 字符） |
+| `X-Hermes-Session-Id` | `.hermesSessionId(...)` | 对话级会话标识 |
 
-### ChatResponse 响应字段（OpenAI 兼容格式）
+### 完整端点列表
 
-| 字段 | 类型 | 说明 |
+| 端点 | 方法 | 说明 |
 |------|------|------|
-| `id` | String | 响应唯一标识 |
-| `object` | String | 对象类型（`chat.completion` 或 `chat.completion.chunk`） |
-| `created` | Long | Unix 时间戳 |
-| `model` | String | 使用的模型 |
-| `choices[].index` | Integer | 选项索引 |
-| `choices[].message` | Message | 非流式：完整消息 |
-| `choices[].delta` | Message | 流式：增量更新 |
-| `choices[].finish_reason` | String | 结束原因（`stop`, `tool_calls` 等） |
-| `usage` | Usage | token 使用统计 |
+| `/v1/chat/completions` | `chat()` / `streamingChat()` | 标准 Chat Completions |
+| `/v1/responses` | `responses()` / `getResponse()` / `deleteResponse()` | Responses API |
+| `/v1/models` | `listModels()` / `getModel()` | 模型发现 |
+| `/v1/runs` | `createRun()` / `getRun()` / `stopRun()` / `approveRun()` | Runs API |
+| `/v1/runs/{id}/events` | `streamRunEvents()` | 运行事件 SSE 流 |
+| `/v1/capabilities` | `getCapabilities()` | 能力发现 |
+| `/v1/skills` | `listSkills()` | 技能列表 |
+| `/v1/toolsets` | `listToolsets()` | 工具集列表 |
+| `/health` | `health()` / `healthDetailed()` | 健康检查 |
 
-## 相关文档
+## 配置属性
 
-- [OpenAI Chat Completions](https://docs.hermes.ai/gateway/openai-http-api)
-- [OpenResponses API](https://docs.hermes.ai/gateway/openresponses-http-api)
-- [Gateway Protocol](https://docs.hermes.ai/gateway/protocol)
+| 属性 | 默认值 | 说明 |
+|------|--------|------|
+| `spring.ai.hermes.base-url` | `http://localhost:8642` | API Server 地址 |
+| `spring.ai.hermes.api-server-key` | | Bearer token |
 
 ## 依赖关系
 
 - Spring Boot 3.4+
-- Spring AI 1.0.0+
+- Spring AI 1.1.7+
 - JDK 17+

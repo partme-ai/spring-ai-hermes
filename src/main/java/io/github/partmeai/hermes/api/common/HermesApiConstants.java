@@ -24,9 +24,9 @@ import org.springframework.ai.observation.conventions.AiProvider;
  */
 public final class HermesApiConstants {
 
-	public static final String DEFAULT_BASE_URL = "http://localhost:18789";
+	public static final String DEFAULT_BASE_URL = "http://localhost:8642";
 
-	public static final String PROVIDER_NAME = "hermes";
+	public static final String PROVIDER_NAME = "hermes-agent";
 
 	private HermesApiConstants() {
 	}

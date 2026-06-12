@@ -19,23 +19,22 @@ package io.github.partmeai.hermes.api;
 import org.springframework.ai.model.ChatModelDescription;
 
 /**
- * Helper class for Hermes agent targets.
- * Hermes uses agent-target model routing rather than raw provider model IDs.
- * @see <a href="https://docs.hermes.ai/gateway/openai-http-api#agent-first-model-contract">Agent-first Model Contract</a>
+ * Hermes model identifier.
+ * <p>
+ * Hermes exposes a single model: {@code hermes-agent}. The {@code model} field
+ * in API requests is accepted but cosmetic — the actual LLM is configured
+ * server-side. For multi-profile setups, each profile advertises its name
+ * as the model id.
  *
  * @since 1.0.0
+ * @see <a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server">Hermes API Server</a>
  */
 public enum HermesModel implements ChatModelDescription {
 
 	/**
-	 * The default Hermes agent.
+	 * The default Hermes agent model id.
 	 */
-	DEFAULT("hermes/default"),
-
-	/**
-	 * Alias for the default agent.
-	 */
-	HERMES("hermes");
+	HERMES_AGENT("hermes-agent");
 
 	private final String id;
 
