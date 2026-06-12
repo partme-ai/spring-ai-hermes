@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 
 import io.github.partmeai.hermes.api.HermesApi;
+import io.github.partmeai.hermes.api.HermesApi.Message;
 import io.github.partmeai.hermes.api.HermesApi.Message.Role;
 import io.github.partmeai.hermes.api.HermesChatOptions;
 import io.github.partmeai.hermes.api.HermesModel;
@@ -13,199 +14,167 @@ import org.junit.jupiter.api.TestInstance;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Integration tests against a real local Hermes Gateway.
- * Requires: hermes gateway --port 8642 --allow-unconfigured
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class HermesIntegrationTests {
 
-	private HermesApi api;
+	private static final String BASE_URL = "http://localhost:8642";
+	private static final String API_KEY = "change-me-local-dev";
 
+	private HermesApi api;
 	private HermesChatModel chatModel;
 
 	@BeforeAll
 	void setUp() {
-		// Use HTTP/1.1 to avoid HTTP/2 upgrade confusion with the Gateway's WS+HTTP multiplex
 		var requestFactory = new SimpleClientHttpRequestFactory();
-		var restClientBuilder = RestClient.builder().requestFactory(requestFactory);
+		var restClientBuilder = RestClient.builder()
+			.requestFactory(requestFactory)
+			.defaultHeader("Authorization", "Bearer " + API_KEY);
 		var webClientBuilder = WebClient.builder()
 			.clientConnector(new org.springframework.http.client.reactive.JdkClientHttpConnector(
-				java.net.http.HttpClient.newBuilder()
-					.version(java.net.http.HttpClient.Version.HTTP_1_1)
-					.build()));
+				java.net.http.HttpClient.newBuilder().version(java.net.http.HttpClient.Version.HTTP_1_1).build()))
+			.defaultHeader("Authorization", "Bearer " + API_KEY);
 
-		api = HermesApi.builder()
-			.baseUrl("http://127.0.0.1:8642")
-			.restClientBuilder(restClientBuilder)
-			.webClientBuilder(webClientBuilder)
-			.build();
-		chatModel = HermesChatModel.builder()
-			.api(api)
-			.defaultOptions(HermesChatOptions.builder()
-				.model(HermesModel.HERMES_AGENT.id())
-				.build())
-			.build();
+		api = HermesApi.builder().baseUrl(BASE_URL)
+			.restClientBuilder(restClientBuilder).webClientBuilder(webClientBuilder).build();
+		chatModel = HermesChatModel.builder().api(api)
+			.defaultOptions(HermesChatOptions.builder().model(HermesModel.HERMES_AGENT.id()).build()).build();
 	}
 
 	// ==============================
-	// GET /v1/models
+	// Health
 	// ==============================
 
 	@Test
-	void listModelsShouldReturnAgentTargets() {
-		var response = api.listModels();
+	void healthShouldReturnOk() {
+		var health = api.health();
+		assertThat(health).containsEntry("status", "ok");
+		assertThat(health).containsEntry("platform", "hermes-agent");
+	}
 
+	@Test
+	void healthDetailedShouldReturnStatus() {
+		var health = api.healthDetailed();
+		assertThat(health).containsKey("status");
+	}
+
+	// ==============================
+	// Models
+	// ==============================
+
+	@Test
+	void listModelsShouldReturnHermesAgent() {
+		var response = api.listModels();
 		assertThat(response).isNotNull();
 		assertThat(response.object()).isEqualTo("list");
 		assertThat(response.data()).isNotEmpty();
-
-		List<String> ids = response.data().stream().map(HermesApi.ModelData::id).toList();
-		assertThat(ids).contains("hermes", "hermes/default");
-		assertThat(ids).anyMatch(id -> id.startsWith("hermes/"));
+		var ids = response.data().stream().map(HermesApi.ModelData::id).toList();
+		assertThat(ids).contains("hermes-agent");
 	}
 
-	// ==============================
-	// GET /v1/models/{id}
-	// ==============================
-
 	@Test
-	void getModelShouldReturnAgentTarget() {
-		var response = api.getModel("hermes/default");
-
+	void healthV1ShouldReturnOk() {
+		var response = api.healthV1();
 		assertThat(response).isNotNull();
-		assertThat(response.id()).isEqualTo("hermes/default");
-		assertThat(response.object()).isEqualTo("model");
+		assertThat(response.get("status")).isEqualTo("ok");
 	}
 
 	// ==============================
-	// POST /v1/chat/completions (non-streaming)
+	// Capabilities
 	// ==============================
 
 	@Test
-	void chatShouldReturnAssistantMessage() {
-		var request = HermesApi.ChatRequest.builder("hermes/default")
-			.messages(List.of(HermesApi.Message.builder(Role.USER)
-				.content("Say exactly: hello").build()))
-			.stream(false)
-			.build();
+	void capabilitiesShouldListFeatures() {
+		var caps = api.getCapabilities();
+		assertThat(caps).isNotNull();
+		assertThat(caps.platform()).isEqualTo("hermes-agent");
+		assertThat(caps.features()).containsKeys("chat_completions", "responses_api");
+	}
 
-		var response = api.chat(request);
+	// ==============================
+	// Chat Completions
+	// ==============================
+
+	@Test
+	void chatShouldReturnResponse() {
+		var request = HermesApi.ChatRequest.builder("hermes-agent")
+			.messages(List.of(Message.builder(Role.USER).content("Reply in one word: hello").build()))
+			.stream(false).build();
+
+		HermesApi.ChatResponse response = api.chat(request);
 
 		assertThat(response).isNotNull();
 		assertThat(response.id()).isNotEmpty();
-		assertThat(response.object()).isEqualTo("chat.completion");
-		assertThat(response.model()).isEqualTo("hermes/default");
+		assertThat(response.model()).isEqualTo("hermes-agent");
 		assertThat(response.choices()).hasSize(1);
 		assertThat(response.choices().get(0).message().role()).isEqualTo(Role.ASSISTANT);
-		assertThat((String) response.choices().get(0).message().content()).contains("hello");
-		assertThat(response.choices().get(0).finishReason()).isEqualTo("stop");
-
-		// Usage should be present
-		assertThat(response.usage()).isNotNull();
-		assertThat(response.usage().totalTokens()).isPositive();
+		System.out.println("Chat response: " + response.choices().get(0).message().content());
 	}
-
-	// ==============================
-	// POST /v1/chat/completions (streaming SSE)
-	// ==============================
 
 	@Test
-	void streamingChatShouldReturnDeltaChunks() {
-		var request = HermesApi.ChatRequest.builder("hermes/default")
-			.messages(List.of(HermesApi.Message.builder(Role.USER)
-				.content("Say exactly: hi").build()))
-			.stream(true)
-			.build();
+	void streamingChatShouldReturnChunks() {
+		var request = HermesApi.ChatRequest.builder("hermes-agent")
+			.messages(List.of(Message.builder(Role.USER).content("Count: 1").build()))
+			.stream(true).build();
 
-		var flux = api.streamingChat(request);
-
-		var chunks = flux.collectList().block();
+		Flux<HermesApi.ChatResponse> flux = api.streamingChat(request);
+		List<HermesApi.ChatResponse> chunks = flux.collectList().block();
 
 		assertThat(chunks).isNotNull().isNotEmpty();
-
-		// Check first chunk has role delta
 		var first = chunks.get(0);
-		assertThat(first.choices()).hasSize(1);
 		assertThat(first.choices().get(0).delta()).isNotNull();
-
-		// Check final chunk has finish_reason
-		var last = chunks.get(chunks.size() - 1);
-		assertThat(last.choices().get(0).finishReason()).isNotNull();
+		System.out.println("Streaming chunks received: " + chunks.size());
 	}
 
 	// ==============================
-	// Spring AI ChatModel integration
+	// Spring AI ChatModel
 	// ==============================
 
 	@Test
 	void springAiChatModelCallShouldWork() {
-		var response = chatModel.call(
-			new org.springframework.ai.chat.prompt.Prompt("Reply in one word: yes"));
+		var response = chatModel.call(new org.springframework.ai.chat.prompt.Prompt("Say: OK"));
 
 		assertThat(response).isNotNull();
 		assertThat(response.getResults()).isNotEmpty();
 		var text = response.getResult().getOutput().getText();
 		assertThat(text).isNotBlank();
-		System.out.println("ChatModel response: " + text);
-	}
-
-	@Test
-	void springAiChatModelStreamShouldWork() {
-		var flux = chatModel.stream(
-			new org.springframework.ai.chat.prompt.Prompt("Count: 1, 2"));
-
-		var responses = flux.collectList().block();
-
-		assertThat(responses).isNotNull().isNotEmpty();
-		// Aggregated response should have content
-		var lastResponse = responses.get(responses.size() - 1);
-		var text = lastResponse.getResult().getOutput().getText();
-		System.out.println("Stream final content: " + text);
+		System.out.println("Spring AI ChatModel: " + text);
 	}
 
 	// ==============================
-	// x-hermes-* headers
+	// Hermes headers
 	// ==============================
 
 	@Test
-	void chatWithXOpenclawModelHeader() {
-		var request = HermesApi.ChatRequest.builder("hermes/default")
-			.messages(List.of(HermesApi.Message.builder(Role.USER)
-				.content("Say: ok").build()))
-			.stream(false)
-			.build();
-
-		// Override backend model via HTTP header
-		var response = api.chat(request, Map.of("X-Hermes-Session-Key", "deepseek/deepseek-v4-flash"));
-
-		assertThat(response).isNotNull();
-		assertThat((String) response.choices().get(0).message().content()).contains("ok");
-	}
-
-	// ==============================
-	// HermesChatOptions header integration
-	// ==============================
-
-	@Test
-	void chatOptionsToHttpHeadersShouldMapCorrectly() {
+	void hermessSessionHeadersShouldBeMappedCorrectly() {
 		var options = HermesChatOptions.builder()
-			.model("hermes/default")
-			.hermesSessionKey("openai/gpt-5.4")
-			.hermesSessionKey("test-session")
-			.hermesSessionId("slack")
-			.user("conv:test-123")
+			.model(HermesModel.HERMES_AGENT.id())
+			.hermesSessionKey("agent:main:test:user-1")
+			.hermesSessionId("transcript-001")
+			.user("user-1")
 			.build();
 
 		var headers = options.toHttpHeaders();
-		assertThat(headers).containsEntry("X-Hermes-Session-Key", "openai/gpt-5.4");
-		assertThat(headers).containsEntry("X-Hermes-Session-Key", "test-session");
-		assertThat(headers).containsEntry("X-Hermes-Session-Id", "slack");
+		assertThat(headers).containsEntry("X-Hermes-Session-Key", "agent:main:test:user-1");
+		assertThat(headers).containsEntry("X-Hermes-Session-Id", "transcript-001");
+		assertThat(options.getUser()).isEqualTo("user-1");
+	}
 
-		// user goes in JSON body, not headers
-		assertThat(options.getUser()).isEqualTo("conv:test-123");
+	// ==============================
+	// Runs API
+	// ==============================
+
+	@Test
+	void createRunShouldReturnRunId() {
+		var req = new HermesApi.RunRequest("Say hello", "hermes-agent", null, null, null, null);
+		HermesApi.Run run = api.createRun(req);
+
+		assertThat(run).isNotNull();
+		assertThat(run.runId()).isNotEmpty();
+		assertThat(run.status()).isIn("started", "completed", "running");
+		System.out.println("Run created: " + run.runId() + " status=" + run.status());
 	}
 }

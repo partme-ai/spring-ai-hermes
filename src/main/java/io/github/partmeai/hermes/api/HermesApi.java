@@ -358,7 +358,7 @@ public final class HermesApi {
 	@JsonInclude(JsonInclude.Include.NON_NULL) @JsonIgnoreProperties(ignoreUnknown = true)
 	public record Capabilities(@JsonProperty("object") String object, @JsonProperty("platform") String platform,
 			@JsonProperty("model") String model, @JsonProperty("auth") Map<String, Object> auth,
-			@JsonProperty("features") Map<String, Boolean> features,
+			@JsonProperty("features") Map<String, Object> features,
 			@JsonProperty("session_key_header") String sessionKeyHeader) {}
 
 	// ========================================================================
