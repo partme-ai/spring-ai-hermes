@@ -180,7 +180,7 @@ public class HermesChatModel implements ChatModel {
 	}
 
 	private ChatResponse internalCall(Prompt prompt, ChatResponse previousChatResponse) {
-		HermesApi.ChatRequest request = openclawChatRequest(prompt, false);
+		HermesApi.ChatRequest request = hermesChatRequest(prompt, false);
 		Map<String, String> headers = hermesHttpHeaders(prompt);
 
 		ChatModelObservationContext observationContext = ChatModelObservationContext.builder()
@@ -224,7 +224,7 @@ public class HermesChatModel implements ChatModel {
 
 	private Flux<ChatResponse> internalStream(Prompt prompt, ChatResponse previousChatResponse) {
 		return Flux.deferContextual(contextView -> {
-			HermesApi.ChatRequest request = openclawChatRequest(prompt, true);
+			HermesApi.ChatRequest request = hermesChatRequest(prompt, true);
 			Map<String, String> headers = hermesHttpHeaders(prompt);
 
 			final ChatModelObservationContext observationContext = ChatModelObservationContext.builder()
@@ -297,7 +297,7 @@ public class HermesChatModel implements ChatModel {
 		return new Prompt(prompt.getInstructions(), requestOptions);
 	}
 
-	HermesApi.ChatRequest openclawChatRequest(Prompt prompt, boolean stream) {
+	HermesApi.ChatRequest hermesChatRequest(Prompt prompt, boolean stream) {
 		List<HermesApi.Message> messages = prompt.getInstructions().stream().flatMap(msg -> {
 			if (msg.getMessageType() == MessageType.SYSTEM) {
 				return List.of(HermesApi.Message.builder(Role.SYSTEM).content(msg.getText()).build()).stream();

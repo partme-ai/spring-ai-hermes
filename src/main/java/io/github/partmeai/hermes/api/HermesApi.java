@@ -327,7 +327,10 @@ public final class HermesApi {
 			@JsonProperty("model") String model, @JsonProperty("input") Object input,
 			@JsonProperty("instructions") String instructions,
 			@JsonProperty("previous_response_id") String previousResponseId,
-			@JsonProperty("conversation") String conversation, @JsonProperty("store") Boolean store) {}
+			@JsonProperty("conversation") String conversation, @JsonProperty("store") Boolean store,
+			@JsonProperty("stream") Boolean stream, @JsonProperty("max_output_tokens") Integer maxOutputTokens,
+			@JsonProperty("temperature") Double temperature, @JsonProperty("top_p") Double topP,
+			@JsonProperty("user") String user) {}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL) @JsonIgnoreProperties(ignoreUnknown = true)
 	public record Response(@JsonProperty("id") String id, @JsonProperty("object") String object,
@@ -369,6 +372,7 @@ public final class HermesApi {
 	public record RunRequest(@JsonProperty("input") String input, @JsonProperty("model") String model,
 			@JsonProperty("session_id") String sessionId, @JsonProperty("instructions") String instructions,
 			@JsonProperty("previous_response_id") String previousResponseId,
+			@JsonProperty("conversation") String conversation,
 			@JsonProperty("conversation_history") List<Message> conversationHistory) {}
 
 	@JsonInclude(JsonInclude.Include.NON_NULL) @JsonIgnoreProperties(ignoreUnknown = true)
