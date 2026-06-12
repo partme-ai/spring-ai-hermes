@@ -9,6 +9,7 @@ import io.github.partmeai.hermes.api.HermesApi.Message.Role;
 import io.github.partmeai.hermes.api.HermesChatOptions;
 import io.github.partmeai.hermes.api.HermesModel;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -18,6 +19,7 @@ import reactor.core.publisher.Flux;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@Tag("integration")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class HermesIntegrationTests {
 
