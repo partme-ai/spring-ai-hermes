@@ -169,7 +169,7 @@ public class HermesIntegrationTests {
 
 	@Test
 	void createRunShouldReturnRunId() {
-		var req = new HermesApi.RunRequest("Say hello", "hermes-agent", null, null, null, null);
+		var req = new HermesApi.RunRequest("Say hello", "hermes-agent", null, null, null, null, null);
 		HermesApi.Run run = api.createRun(req);
 
 		assertThat(run).isNotNull();

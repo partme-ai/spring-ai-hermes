@@ -90,7 +90,7 @@ public class HermesChatRequestTests {
 	void createRequestWithDefaultOptions() {
 		var prompt = this.chatModel.buildRequestPrompt(new Prompt("Test message content"));
 
-		var request = this.chatModel.openclawChatRequest(prompt, false);
+		var request = this.chatModel.hermesChatRequest(prompt, false);
 
 		assertThat(request.messages()).hasSize(1);
 		assertThat(request.stream()).isFalse();
@@ -104,7 +104,7 @@ public class HermesChatRequestTests {
 		HermesChatOptions promptOptions = HermesChatOptions.builder().temperature(0.8).topP(0.5).build();
 		var prompt = this.chatModel.buildRequestPrompt(new Prompt("Test message content", promptOptions));
 
-		var request = this.chatModel.openclawChatRequest(prompt, true);
+		var request = this.chatModel.hermesChatRequest(prompt, true);
 
 		assertThat(request.messages()).hasSize(1);
 		assertThat(request.stream()).isTrue();
@@ -118,7 +118,7 @@ public class HermesChatRequestTests {
 		ChatOptions portablePromptOptions = ChatOptions.builder().temperature(0.9).topK(100).topP(0.6).build();
 		var prompt = this.chatModel.buildRequestPrompt(new Prompt("Test message content", portablePromptOptions));
 
-		var request = this.chatModel.openclawChatRequest(prompt, true);
+		var request = this.chatModel.hermesChatRequest(prompt, true);
 
 		assertThat(request.messages()).hasSize(1);
 		assertThat(request.stream()).isTrue();
@@ -132,7 +132,7 @@ public class HermesChatRequestTests {
 		HermesChatOptions promptOptions = HermesChatOptions.builder().model("PROMPT_MODEL").build();
 		var prompt = this.chatModel.buildRequestPrompt(new Prompt("Test message content", promptOptions));
 
-		var request = this.chatModel.openclawChatRequest(prompt, true);
+		var request = this.chatModel.hermesChatRequest(prompt, true);
 
 		assertThat(request.model()).isEqualTo("PROMPT_MODEL");
 	}
@@ -146,12 +146,12 @@ public class HermesChatRequestTests {
 			.build();
 
 		var prompt1 = chatModel.buildRequestPrompt(new Prompt("Test message content"));
-		var request = chatModel.openclawChatRequest(prompt1, true);
+		var request = chatModel.hermesChatRequest(prompt1, true);
 		assertThat(request.model()).isEqualTo("DEFAULT_OPTIONS_MODEL");
 
 		HermesChatOptions promptOptions = HermesChatOptions.builder().model("PROMPT_MODEL").build();
 		var prompt2 = chatModel.buildRequestPrompt(new Prompt("Test message content", promptOptions));
-		request = chatModel.openclawChatRequest(prompt2, true);
+		request = chatModel.hermesChatRequest(prompt2, true);
 		assertThat(request.model()).isEqualTo("PROMPT_MODEL");
 	}
 
@@ -159,7 +159,7 @@ public class HermesChatRequestTests {
 	void createRequestWithAllMessageTypes() {
 		var prompt = this.chatModel.buildRequestPrompt(new Prompt(createMessagesWithAllMessageTypes()));
 
-		var request = this.chatModel.openclawChatRequest(prompt, false);
+		var request = this.chatModel.hermesChatRequest(prompt, false);
 
 		assertThat(request.messages()).hasSize(6);
 
@@ -198,7 +198,7 @@ public class HermesChatRequestTests {
 			.build();
 
 		var prompt = this.chatModel.buildRequestPrompt(new Prompt("Test", options));
-		var request = this.chatModel.openclawChatRequest(prompt, false);
+		var request = this.chatModel.hermesChatRequest(prompt, false);
 
 		assertThat(request.user()).isEqualTo("conv:my-conversation");
 		assertThat(request.model()).isEqualTo("hermes-agent");
