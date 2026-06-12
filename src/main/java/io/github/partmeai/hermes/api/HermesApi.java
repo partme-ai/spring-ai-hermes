@@ -203,6 +203,62 @@ public final class HermesApi {
 	}
 
 	// ========================================================================
+	// Sessions API
+	// ========================================================================
+
+	@SuppressWarnings("unchecked")
+	public List<Session> listSessions() {
+		return this.restClient.get().uri(HermesApiConstants.API_SESSIONS).retrieve().body(List.class);
+	}
+
+	public Session createSession(SessionCreateRequest request) {
+		return this.restClient.post().uri(HermesApiConstants.API_SESSIONS).body(request).retrieve().body(Session.class);
+	}
+
+	public Session getSession(String sessionId) {
+		return this.restClient.get().uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).retrieve().body(Session.class);
+	}
+
+	public Session updateSession(String sessionId, Map<String, Object> patch) {
+		return this.restClient.patch().uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).body(patch).retrieve().body(Session.class);
+	}
+
+	public void deleteSession(String sessionId) {
+		this.restClient.delete().uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).retrieve().toBodilessEntity();
+	}
+
+	@SuppressWarnings("unchecked")
+	public List<Map<String, Object>> getSessionMessages(String sessionId) {
+		return (List<Map<String, Object>>) (List<?>) this.restClient.get()
+			.uri(HermesApiConstants.API_SESSIONS_MESSAGES, sessionId).retrieve().body(List.class);
+	}
+
+	public Session forkSession(String sessionId, String title) {
+		return this.restClient.post().uri(HermesApiConstants.API_SESSIONS_FORK, sessionId)
+			.body(title != null ? Map.of("title", title) : Map.of()).retrieve().body(Session.class);
+	}
+
+	@SuppressWarnings("unchecked")
+	public Flux<Map<String, Object>> streamSessionChat(String sessionId, String input) {
+		return this.webClient.post().uri(HermesApiConstants.API_SESSIONS_CHAT_STREAM, sessionId)
+			.accept(MediaType.TEXT_EVENT_STREAM).bodyValue(Map.of("input", input)).retrieve()
+			.bodyToFlux(Map.class).map(m -> (Map<String, Object>) m);
+	}
+
+	// ========================================================================
+	// Session Models
+	// ========================================================================
+
+	@JsonInclude(JsonInclude.Include.NON_NULL) @JsonIgnoreProperties(ignoreUnknown = true)
+	public record SessionCreateRequest(@JsonProperty("title") String title) {}
+
+	@JsonInclude(JsonInclude.Include.NON_NULL) @JsonIgnoreProperties(ignoreUnknown = true)
+	public record Session(@JsonProperty("id") String id, @JsonProperty("title") String title,
+			@JsonProperty("parent_id") String parentId, @JsonProperty("created_at") String createdAt,
+			@JsonProperty("updated_at") String updatedAt, @JsonProperty("metadata") Map<String, Object> metadata) {}
+
+
+	// ========================================================================
 	// Request / Response Models — Chat Completions
 	// ========================================================================
 
@@ -380,6 +436,50 @@ public final class HermesApi {
 			@JsonProperty("status") String status, @JsonProperty("session_id") String sessionId,
 			@JsonProperty("model") String model, @JsonProperty("output") String output,
 			@JsonProperty("usage") ChatResponse.Usage usage) {}
+
+
+	// ========================================================================
+	// Jobs API (background scheduled work)
+	// ========================================================================
+
+	@SuppressWarnings("unchecked")
+	public List<Map<String, Object>> listJobs() {
+		return (List<Map<String, Object>>) (List<?>) this.restClient.get().uri(HermesApiConstants.API_JOBS).retrieve().body(List.class);
+	}
+
+	@SuppressWarnings("unchecked")
+	public Map<String, Object> createJob(Map<String, Object> job) {
+		return this.restClient.post().uri(HermesApiConstants.API_JOBS).body(job).retrieve().body(Map.class);
+	}
+
+	@SuppressWarnings("unchecked")
+	public Map<String, Object> getJob(String jobId) {
+		return this.restClient.get().uri(HermesApiConstants.API_JOBS_BY_ID, jobId).retrieve().body(Map.class);
+	}
+
+	@SuppressWarnings("unchecked")
+	public Map<String, Object> updateJob(String jobId, Map<String, Object> patch) {
+		return this.restClient.patch().uri(HermesApiConstants.API_JOBS_BY_ID, jobId).body(patch).retrieve().body(Map.class);
+	}
+
+	public void deleteJob(String jobId) {
+		this.restClient.delete().uri(HermesApiConstants.API_JOBS_BY_ID, jobId).retrieve().toBodilessEntity();
+	}
+
+	@SuppressWarnings("unchecked")
+	public Map<String, Object> pauseJob(String jobId) {
+		return this.restClient.post().uri(HermesApiConstants.API_JOBS_PAUSE, jobId).retrieve().body(Map.class);
+	}
+
+	@SuppressWarnings("unchecked")
+	public Map<String, Object> resumeJob(String jobId) {
+		return this.restClient.post().uri(HermesApiConstants.API_JOBS_RESUME, jobId).retrieve().body(Map.class);
+	}
+
+	@SuppressWarnings("unchecked")
+	public Map<String, Object> runJobNow(String jobId) {
+		return this.restClient.post().uri(HermesApiConstants.API_JOBS_RUN, jobId).retrieve().body(Map.class);
+	}
 
 	// ========================================================================
 	// Builder

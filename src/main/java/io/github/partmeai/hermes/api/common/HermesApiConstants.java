@@ -82,5 +82,27 @@ public final class HermesApiConstants {
 	/** Resolve a pending approval. */
 	public static final String V1_RUNS_APPROVAL = "/v1/runs/{id}/approval";
 
+
+	// -----------------------------------------------------------------------
+	// Jobs API paths
+	// -----------------------------------------------------------------------
+
+	public static final String API_JOBS = "/api/jobs";
+	public static final String API_JOBS_BY_ID = "/api/jobs/{id}";
+	public static final String API_JOBS_PAUSE = "/api/jobs/{id}/pause";
+	public static final String API_JOBS_RESUME = "/api/jobs/{id}/resume";
+	public static final String API_JOBS_RUN = "/api/jobs/{id}/run";
+
+	// -----------------------------------------------------------------------
+	// Sessions API paths
+	// -----------------------------------------------------------------------
+
+	public static final String API_SESSIONS = "/api/sessions";
+	public static final String API_SESSIONS_BY_ID = "/api/sessions/{id}";
+	public static final String API_SESSIONS_MESSAGES = "/api/sessions/{id}/messages";
+	public static final String API_SESSIONS_FORK = "/api/sessions/{id}/fork";
+	public static final String API_SESSIONS_CHAT = "/api/sessions/{id}/chat";
+	public static final String API_SESSIONS_CHAT_STREAM = "/api/sessions/{id}/chat/stream";
+
 	private HermesApiConstants() {}
 }
