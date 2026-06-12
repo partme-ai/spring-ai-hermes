@@ -17,6 +17,7 @@
 package io.github.partmeai.hermes.api;
 
 import org.springframework.ai.model.ChatModelDescription;
+import io.github.partmeai.hermes.api.common.HermesApiConstants;
 
 /**
  * Hermes model identifier.
@@ -34,7 +35,7 @@ public enum HermesModel implements ChatModelDescription {
 	/**
 	 * The default Hermes agent model id.
 	 */
-	HERMES_AGENT("hermes-agent");
+	HERMES_AGENT(HermesApiConstants.DEFAULT_MODEL);
 
 	private final String id;
 

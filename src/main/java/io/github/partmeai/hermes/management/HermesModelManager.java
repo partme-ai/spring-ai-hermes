@@ -1,6 +1,7 @@
 package io.github.partmeai.hermes.management;
 
 import java.util.List;
+import io.github.partmeai.hermes.api.common.HermesApiConstants;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -48,5 +49,5 @@ public class HermesModelManager {
 	public boolean isModelAvailable(String modelId) { return listModels().contains(modelId); }
 
 	/** The default model id: {@code hermes-agent}. */
-	public String getDefaultModel() { return "hermes-agent"; }
+	public String getDefaultModel() { return HermesApiConstants.DEFAULT_MODEL; }
 }

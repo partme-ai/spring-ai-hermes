@@ -79,7 +79,7 @@ public final class HermesApi {
 	public ChatResponse chat(ChatRequest chatRequest, Map<String, String> extraHeaders) {
 		Assert.notNull(chatRequest, REQUEST_BODY_NULL_ERROR);
 		Assert.isTrue(!chatRequest.stream(), "Stream mode must be disabled.");
-		var spec = this.restClient.post().uri("/v1/chat/completions");
+		var spec = this.restClient.post().uri(HermesApiConstants.V1_CHAT_COMPLETIONS);
 		extraHeaders.forEach(spec::header);
 		return spec.body(chatRequest).retrieve().body(ChatResponse.class);
 	}
@@ -89,7 +89,7 @@ public final class HermesApi {
 	public Flux<ChatResponse> streamingChat(ChatRequest chatRequest, Map<String, String> extraHeaders) {
 		Assert.notNull(chatRequest, REQUEST_BODY_NULL_ERROR);
 		Assert.isTrue(chatRequest.stream(), "Request must set stream to true.");
-		var spec = this.webClient.post().uri("/v1/chat/completions").accept(MediaType.TEXT_EVENT_STREAM);
+		var spec = this.webClient.post().uri(HermesApiConstants.V1_CHAT_COMPLETIONS).accept(MediaType.TEXT_EVENT_STREAM);
 		extraHeaders.forEach(spec::header);
 		return spec.body(Mono.just(chatRequest), ChatRequest.class).retrieve()
 			.bodyToFlux(ChatResponse.class).onErrorResume(sseErrorHandler::handle)
@@ -104,19 +104,19 @@ public final class HermesApi {
 
 	public Response responses(ResponseRequest request, Map<String, String> extraHeaders) {
 		Assert.notNull(request, REQUEST_BODY_NULL_ERROR);
-		var spec = this.restClient.post().uri("/v1/responses");
+		var spec = this.restClient.post().uri(HermesApiConstants.V1_RESPONSES);
 		extraHeaders.forEach(spec::header);
 		return spec.body(request).retrieve().body(Response.class);
 	}
 
 	public Response getResponse(String responseId) {
 		Assert.hasText(responseId, "responseId must not be empty");
-		return this.restClient.get().uri("/v1/responses/{id}", responseId).retrieve().body(Response.class);
+		return this.restClient.get().uri(HermesApiConstants.V1_RESPONSES_BY_ID, responseId).retrieve().body(Response.class);
 	}
 
 	public void deleteResponse(String responseId) {
 		Assert.hasText(responseId, "responseId must not be empty");
-		this.restClient.delete().uri("/v1/responses/{id}", responseId).retrieve().toBodilessEntity();
+		this.restClient.delete().uri(HermesApiConstants.V1_RESPONSES_BY_ID, responseId).retrieve().toBodilessEntity();
 	}
 
 	// ========================================================================
@@ -124,12 +124,12 @@ public final class HermesApi {
 	// ========================================================================
 
 	public ListModelResponse listModels() {
-		return this.restClient.get().uri("/v1/models").retrieve().body(ListModelResponse.class);
+		return this.restClient.get().uri(HermesApiConstants.V1_MODELS).retrieve().body(ListModelResponse.class);
 	}
 
 	public ModelResponse getModel(String modelId) {
 		Assert.hasText(modelId, "modelId must not be empty");
-		return this.restClient.get().uri("/v1/models/{id}", modelId).retrieve().body(ModelResponse.class);
+		return this.restClient.get().uri(HermesApiConstants.V1_MODELS_BY_ID, modelId).retrieve().body(ModelResponse.class);
 	}
 
 	// ========================================================================
@@ -137,15 +137,15 @@ public final class HermesApi {
 	// ========================================================================
 
 	public Map<String, Object> health() {
-		return this.restClient.get().uri("/health").retrieve().body(Map.class);
+		return this.restClient.get().uri(HermesApiConstants.HEALTH).retrieve().body(Map.class);
 	}
 
 	public Map<String, Object> healthV1() {
-		return this.restClient.get().uri("/v1/health").retrieve().body(Map.class);
+		return this.restClient.get().uri(HermesApiConstants.V1_HEALTH).retrieve().body(Map.class);
 	}
 
 	public Map<String, Object> healthDetailed() {
-		return this.restClient.get().uri("/health/detailed").retrieve().body(Map.class);
+		return this.restClient.get().uri(HermesApiConstants.HEALTH_DETAILED).retrieve().body(Map.class);
 	}
 
 	// ========================================================================
@@ -153,17 +153,17 @@ public final class HermesApi {
 	// ========================================================================
 
 	public Capabilities getCapabilities() {
-		return this.restClient.get().uri("/v1/capabilities").retrieve().body(Capabilities.class);
+		return this.restClient.get().uri(HermesApiConstants.V1_CAPABILITIES).retrieve().body(Capabilities.class);
 	}
 
 	@SuppressWarnings("unchecked")
 	public List<Map<String, Object>> listSkills() {
-		return (List<Map<String, Object>>) (List<?>) this.restClient.get().uri("/v1/skills").retrieve().body(List.class);
+		return (List<Map<String, Object>>) (List<?>) this.restClient.get().uri(HermesApiConstants.V1_SKILLS).retrieve().body(List.class);
 	}
 
 	@SuppressWarnings("unchecked")
 	public List<Map<String, Object>> listToolsets() {
-		return (List<Map<String, Object>>) (List<?>) this.restClient.get().uri("/v1/toolsets").retrieve().body(List.class);
+		return (List<Map<String, Object>>) (List<?>) this.restClient.get().uri(HermesApiConstants.V1_TOOLSETS).retrieve().body(List.class);
 	}
 
 	// ========================================================================
@@ -174,32 +174,32 @@ public final class HermesApi {
 
 	public Run createRun(RunRequest request, Map<String, String> extraHeaders) {
 		Assert.notNull(request, REQUEST_BODY_NULL_ERROR);
-		var spec = this.restClient.post().uri("/v1/runs");
+		var spec = this.restClient.post().uri(HermesApiConstants.V1_RUNS);
 		extraHeaders.forEach(spec::header);
 		return spec.body(request).retrieve().body(Run.class);
 	}
 
 	public Run getRun(String runId) {
 		Assert.hasText(runId, "runId must not be empty");
-		return this.restClient.get().uri("/v1/runs/{id}", runId).retrieve().body(Run.class);
+		return this.restClient.get().uri(HermesApiConstants.V1_RUNS_BY_ID, runId).retrieve().body(Run.class);
 	}
 
 	@SuppressWarnings("unchecked")
 	public Flux<Map<String, Object>> streamRunEvents(String runId) {
 		Assert.hasText(runId, "runId must not be empty");
-		return this.webClient.get().uri("/v1/runs/{id}/events", runId)
+		return this.webClient.get().uri(HermesApiConstants.V1_RUNS_EVENTS, runId)
 			.accept(MediaType.TEXT_EVENT_STREAM).retrieve().bodyToFlux(Map.class)
 			.map(m -> (Map<String, Object>) m);
 	}
 
 	public void stopRun(String runId) {
 		Assert.hasText(runId, "runId must not be empty");
-		this.restClient.post().uri("/v1/runs/{id}/stop", runId).retrieve().toBodilessEntity();
+		this.restClient.post().uri(HermesApiConstants.V1_RUNS_STOP, runId).retrieve().toBodilessEntity();
 	}
 
 	public void approveRun(String runId, Map<String, Object> decision) {
 		Assert.hasText(runId, "runId must not be empty");
-		this.restClient.post().uri("/v1/runs/{id}/approval", runId).body(decision).retrieve().toBodilessEntity();
+		this.restClient.post().uri(HermesApiConstants.V1_RUNS_APPROVAL, runId).body(decision).retrieve().toBodilessEntity();
 	}
 
 	// ========================================================================

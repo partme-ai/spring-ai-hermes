@@ -17,6 +17,7 @@
 package io.github.partmeai.hermes.api;
 
 import java.util.ArrayList;
+import io.github.partmeai.hermes.api.common.HermesApiConstants;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -99,10 +100,10 @@ public class HermesChatOptions implements ToolCallingChatOptions, StructuredOutp
 		if (hermesSessionKey != null && !hermesSessionKey.isEmpty()) {
 			String sanitized = hermesSessionKey.replace("\r", "").replace("\n", "").replace("\0", "");
 			if (sanitized.length() > 256) sanitized = sanitized.substring(0, 256);
-			headers.put("X-Hermes-Session-Key", sanitized);
+			headers.put(HermesApiConstants.HEADER_SESSION_KEY, sanitized);
 		}
 		if (hermesSessionId != null && !hermesSessionId.isEmpty()) {
-			headers.put("X-Hermes-Session-Id", hermesSessionId);
+			headers.put(HermesApiConstants.HEADER_SESSION_ID, hermesSessionId);
 		}
 		return headers;
 	}
