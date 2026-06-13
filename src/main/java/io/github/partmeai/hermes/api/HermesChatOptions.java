@@ -37,6 +37,7 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 
 /**
  * Strongly-typed chat options for the Hermes API Server.
@@ -65,6 +66,7 @@ public class HermesChatOptions implements ToolCallingChatOptions, StructuredOutp
 	@JsonProperty("stop") private List<String> stop;
 	@JsonProperty("max_tokens") private Integer maxTokens;
 	@JsonProperty("user") private String user;
+	@JsonProperty("thinking") private ThinkOption thinking;
 
 	// Hermes-specific HTTP header fields (not in JSON body)
 	@JsonIgnore private String hermesSessionKey;
@@ -74,7 +76,7 @@ public class HermesChatOptions implements ToolCallingChatOptions, StructuredOutp
 	@JsonIgnore private Boolean internalToolExecutionEnabled;
 	@JsonIgnore private List<ToolCallback> toolCallbacks = new ArrayList<>();
 	@JsonIgnore private Set<String> toolNames = new HashSet<>();
-	@JsonIgnore private Map<String, Object> toolContext = new HashMap<>();
+	@JsonIgnore private Map<String, Object> toolContext;
 	@JsonIgnore private Object format;
 
 	public static Builder builder() { return new Builder(); }
@@ -83,7 +85,7 @@ public class HermesChatOptions implements ToolCallingChatOptions, StructuredOutp
 		return builder().model(o.getModel()).temperature(o.getTemperature())
 			.topP(o.getTopP()).topK(o.getTopK()).frequencyPenalty(o.getFrequencyPenalty())
 			.presencePenalty(o.getPresencePenalty()).seed(o.getSeed()).stop(o.getStop())
-			.maxTokens(o.getMaxTokens()).user(o.getUser())
+			.maxTokens(o.getMaxTokens()).user(o.getUser()).thinking(o.getThinking())
 			.hermesSessionKey(o.getHermesSessionKey()).hermesSessionId(o.getHermesSessionId())
 			.outputSchema(o.getOutputSchema()).internalToolExecutionEnabled(o.getInternalToolExecutionEnabled())
 			.toolCallbacks(o.getToolCallbacks()).toolNames(o.getToolNames()).toolContext(o.getToolContext()).build();
@@ -97,12 +99,12 @@ public class HermesChatOptions implements ToolCallingChatOptions, StructuredOutp
 	 */
 	public Map<String, String> toHttpHeaders() {
 		Map<String, String> headers = new HashMap<>();
-		if (hermesSessionKey != null && !hermesSessionKey.isEmpty()) {
+		if (StringUtils.hasText(hermesSessionKey)) {
 			String sanitized = hermesSessionKey.replace("\r", "").replace("\n", "").replace("\0", "");
 			if (sanitized.length() > 256) sanitized = sanitized.substring(0, 256);
 			headers.put(HermesApiConstants.HEADER_SESSION_KEY, sanitized);
 		}
-		if (hermesSessionId != null && !hermesSessionId.isEmpty()) {
+		if (StringUtils.hasText(hermesSessionId)) {
 			headers.put(HermesApiConstants.HEADER_SESSION_ID, hermesSessionId);
 		}
 		return headers;
@@ -134,6 +136,8 @@ public class HermesChatOptions implements ToolCallingChatOptions, StructuredOutp
 	@JsonIgnore public void setMaxTokens(Integer v) { this.maxTokens = v; }
 	public String getUser() { return user; }
 	public void setUser(String v) { this.user = v; }
+	public ThinkOption getThinking() { return thinking; }
+	public void setThinking(ThinkOption v) { this.thinking = v; }
 	public String getHermesSessionKey() { return hermesSessionKey; }
 	public void setHermesSessionKey(String v) { this.hermesSessionKey = v; }
 	public String getHermesSessionId() { return hermesSessionId; }
@@ -165,6 +169,7 @@ public class HermesChatOptions implements ToolCallingChatOptions, StructuredOutp
 			&& Objects.equals(topK, t.topK) && Objects.equals(frequencyPenalty, t.frequencyPenalty)
 			&& Objects.equals(presencePenalty, t.presencePenalty) && Objects.equals(seed, t.seed)
 			&& Objects.equals(stop, t.stop) && Objects.equals(maxTokens, t.maxTokens) && Objects.equals(user, t.user)
+			&& Objects.equals(thinking, t.thinking)
 			&& Objects.equals(hermesSessionKey, t.hermesSessionKey) && Objects.equals(hermesSessionId, t.hermesSessionId)
 			&& Objects.equals(format, t.format) && Objects.equals(toolCallbacks, t.toolCallbacks)
 			&& Objects.equals(toolNames, t.toolNames) && Objects.equals(toolContext, t.toolContext)
@@ -173,7 +178,7 @@ public class HermesChatOptions implements ToolCallingChatOptions, StructuredOutp
 
 	@Override public int hashCode() {
 		return Objects.hash(model, temperature, topP, topK, frequencyPenalty, presencePenalty, seed, stop, maxTokens,
-			user, hermesSessionKey, hermesSessionId, format, toolCallbacks, toolNames, toolContext, internalToolExecutionEnabled);
+			user, thinking, hermesSessionKey, hermesSessionId, format, toolCallbacks, toolNames, toolContext, internalToolExecutionEnabled);
 	}
 
 	public static final class Builder {
@@ -189,6 +194,7 @@ public class HermesChatOptions implements ToolCallingChatOptions, StructuredOutp
 		public Builder stop(List<String> v) { o.stop = v; return this; }
 		public Builder maxTokens(Integer v) { o.maxTokens = v; return this; }
 		public Builder user(String v) { o.user = v; return this; }
+			public Builder thinking(ThinkOption v) { o.thinking = v; return this; }
 		public Builder hermesSessionKey(String v) { o.hermesSessionKey = v; return this; }
 		public Builder hermesSessionId(String v) { o.hermesSessionId = v; return this; }
 		public Builder outputSchema(String v) { o.setOutputSchema(v); return this; }
@@ -197,7 +203,7 @@ public class HermesChatOptions implements ToolCallingChatOptions, StructuredOutp
 		public Builder toolCallbacks(ToolCallback... v) { Assert.notNull(v, "toolCallbacks cannot be null"); o.toolCallbacks.addAll(Arrays.asList(v)); return this; }
 		public Builder toolNames(Set<String> v) { o.setToolNames(v); return this; }
 		public Builder toolNames(String... v) { Assert.notNull(v, "toolNames cannot be null"); o.toolNames.addAll(Set.of(v)); return this; }
-		public Builder toolContext(Map<String, Object> v) { if (o.toolContext == null) o.toolContext = v; else o.toolContext.putAll(v); return this; }
+		public Builder toolContext(Map<String, Object> v) { o.toolContext = v; return this; }
 		public HermesChatOptions build() { return o; }
 	}
 }

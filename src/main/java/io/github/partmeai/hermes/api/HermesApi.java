@@ -23,8 +23,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.github.partmeai.hermes.api.common.HermesApiConstants;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -45,13 +44,12 @@ import org.springframework.web.reactive.function.client.WebClient;
  * @author Loong Wan
  * @see <a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server">Hermes API Server</a>
  */
+@Slf4j
 public final class HermesApi {
 
 	public static Builder builder() { return new Builder(); }
 
 	public static final String REQUEST_BODY_NULL_ERROR = "The request body can not be null.";
-
-	private static final Logger logger = LoggerFactory.getLogger(HermesApi.class);
 
 	private final RestClient restClient;
 	private final WebClient webClient;
@@ -114,9 +112,9 @@ public final class HermesApi {
 		return this.restClient.get().uri(HermesApiConstants.V1_RESPONSES_BY_ID, responseId).retrieve().body(Response.class);
 	}
 
-	public void deleteResponse(String responseId) {
+	public boolean deleteResponse(String responseId) {
 		Assert.hasText(responseId, "responseId must not be empty");
-		this.restClient.delete().uri(HermesApiConstants.V1_RESPONSES_BY_ID, responseId).retrieve().toBodilessEntity();
+		return this.restClient.delete().uri(HermesApiConstants.V1_RESPONSES_BY_ID, responseId).retrieve().toBodilessEntity().getStatusCode().is2xxSuccessful();
 	}
 
 	// ========================================================================
@@ -208,7 +206,22 @@ public final class HermesApi {
 
 	@SuppressWarnings("unchecked")
 	public List<Session> listSessions() {
-		return this.restClient.get().uri(HermesApiConstants.API_SESSIONS).retrieve().body(List.class);
+		return (List<Session>) (List<?>) this.restClient.get().uri(HermesApiConstants.API_SESSIONS).retrieve().body(List.class);
+	}
+
+	/** 分页列出 sessions。 */
+	public List<Session> listSessions(Integer limit, Integer offset, String source, Boolean includeChildren) {
+		var uri = this.restClient.get().uri(b -> {
+			var u = b.path(HermesApiConstants.API_SESSIONS);
+			if (limit != null) u.queryParam("limit", limit);
+			if (offset != null) u.queryParam("offset", offset);
+			if (source != null) u.queryParam("source", source);
+			if (includeChildren != null) u.queryParam("include_children", includeChildren);
+			return u.build();
+		});
+		@SuppressWarnings("unchecked")
+		List<Session> sessions = (List<Session>) (List<?>) uri.retrieve().body(List.class);
+		return sessions;
 	}
 
 	public Session createSession(SessionCreateRequest request) {
@@ -223,8 +236,9 @@ public final class HermesApi {
 		return this.restClient.patch().uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).body(patch).retrieve().body(Session.class);
 	}
 
-	public void deleteSession(String sessionId) {
-		this.restClient.delete().uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).retrieve().toBodilessEntity();
+	public boolean deleteSession(String sessionId) {
+		Assert.hasText(sessionId, "sessionId must not be empty");
+		return this.restClient.delete().uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).retrieve().toBodilessEntity().getStatusCode().is2xxSuccessful();
 	}
 
 	@SuppressWarnings("unchecked")
@@ -236,6 +250,13 @@ public final class HermesApi {
 	public Session forkSession(String sessionId, String title) {
 		return this.restClient.post().uri(HermesApiConstants.API_SESSIONS_FORK, sessionId)
 			.body(title != null ? Map.of("title", title) : Map.of()).retrieve().body(Session.class);
+	}
+
+	public ChatResponse sessionChat(String sessionId, String input) {
+		Assert.hasText(sessionId, "sessionId must not be empty");
+		Assert.hasText(input, "input must not be empty");
+		return this.restClient.post().uri(HermesApiConstants.API_SESSIONS_CHAT, sessionId)
+			.body(Map.of("input", input)).retrieve().body(ChatResponse.class);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -270,7 +291,8 @@ public final class HermesApi {
 			@JsonProperty("top_p") Double topP, @JsonProperty("frequency_penalty") Double frequencyPenalty,
 			@JsonProperty("presence_penalty") Double presencePenalty, @JsonProperty("seed") Integer seed,
 			@JsonProperty("stop") Object stop, @JsonProperty("user") String user,
-			@JsonProperty("stream_options") StreamOptions streamOptions) {
+			@JsonProperty("stream_options") StreamOptions streamOptions,
+			@JsonProperty("thinking") ThinkOption thinking) {
 
 		public static Builder builder(String model) { return new Builder(model); }
 
@@ -289,7 +311,7 @@ public final class HermesApi {
 			private final String model; private List<Message> messages = List.of(); private boolean stream;
 			private List<Tool> tools = List.of(); private Object toolChoice; private Integer maxCompletionTokens, maxTokens;
 			private Double temperature, topP, frequencyPenalty, presencePenalty; private Integer seed;
-			private Object stop; private String user; private StreamOptions streamOptions;
+			private Object stop; private String user; private StreamOptions streamOptions; private ThinkOption thinking;
 
 			public Builder(String m) { Assert.notNull(m, "model must not be null"); this.model = m; }
 			public Builder messages(List<Message> v) { messages = v; return this; }
@@ -306,8 +328,9 @@ public final class HermesApi {
 			public Builder stop(Object v) { stop = v; return this; }
 			public Builder user(String v) { user = v; return this; }
 			public Builder streamOptions(StreamOptions v) { streamOptions = v; return this; }
+			public Builder thinking(ThinkOption v) { thinking = v; return this; }
 			public ChatRequest build() { return new ChatRequest(model, messages, stream, tools, toolChoice, maxCompletionTokens,
-				maxTokens, temperature, topP, frequencyPenalty, presencePenalty, seed, stop, user, streamOptions); }
+				maxTokens, temperature, topP, frequencyPenalty, presencePenalty, seed, stop, user, streamOptions, thinking); }
 		}
 	}
 
@@ -391,7 +414,14 @@ public final class HermesApi {
 	@JsonInclude(JsonInclude.Include.NON_NULL) @JsonIgnoreProperties(ignoreUnknown = true)
 	public record Response(@JsonProperty("id") String id, @JsonProperty("object") String object,
 			@JsonProperty("status") String status, @JsonProperty("model") String model,
-			@JsonProperty("output") List<Map<String, Object>> output, @JsonProperty("usage") ChatResponse.Usage usage) {}
+			@JsonProperty("output") List<OutputItem> output, @JsonProperty("usage") ChatResponse.Usage usage) {
+
+		@JsonInclude(JsonInclude.Include.NON_NULL) @JsonIgnoreProperties(ignoreUnknown = true)
+		public record OutputItem(@JsonProperty("type") String type, @JsonProperty("name") String name,
+				@JsonProperty("arguments") String arguments, @JsonProperty("call_id") String callId,
+				@JsonProperty("output") String output, @JsonProperty("role") String role,
+				@JsonProperty("content") List<Map<String, Object>> content) {}
+	}
 
 	// ========================================================================
 	// Models — Models listing
@@ -462,8 +492,9 @@ public final class HermesApi {
 		return this.restClient.patch().uri(HermesApiConstants.API_JOBS_BY_ID, jobId).body(patch).retrieve().body(Map.class);
 	}
 
-	public void deleteJob(String jobId) {
-		this.restClient.delete().uri(HermesApiConstants.API_JOBS_BY_ID, jobId).retrieve().toBodilessEntity();
+	public boolean deleteJob(String jobId) {
+		Assert.hasText(jobId, "jobId must not be empty");
+		return this.restClient.delete().uri(HermesApiConstants.API_JOBS_BY_ID, jobId).retrieve().toBodilessEntity().getStatusCode().is2xxSuccessful();
 	}
 
 	@SuppressWarnings("unchecked")

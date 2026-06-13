@@ -23,8 +23,8 @@ import java.util.Optional;
 import io.micrometer.observation.Observation;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.observation.contextpropagation.ObservationThreadLocalAccessor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.lang.NonNull;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
@@ -55,6 +55,7 @@ import org.springframework.ai.model.tool.internal.ToolCallReactiveContextHolder;
 import io.github.partmeai.hermes.api.HermesApi;
 import io.github.partmeai.hermes.api.HermesApi.ChatRequest;
 import io.github.partmeai.hermes.api.HermesApi.Message.Role;
+import io.github.partmeai.hermes.api.HermesApiHelper;
 import io.github.partmeai.hermes.api.HermesChatOptions;
 import io.github.partmeai.hermes.api.HermesModel;
 import io.github.partmeai.hermes.api.common.HermesApiConstants;
@@ -82,9 +83,8 @@ import org.springframework.util.StringUtils;
  * @author Loong Wan
  * @see <a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server">Hermes API Server</a>
  */
+@Slf4j
 public class HermesChatModel implements ChatModel {
-
-	private static final Logger logger = LoggerFactory.getLogger(HermesChatModel.class);
 
 	private static final ChatModelObservationConvention DEFAULT_OBSERVATION_CONVENTION =
 			new DefaultChatModelObservationConvention();
@@ -130,16 +130,7 @@ public class HermesChatModel implements ChatModel {
 	static ChatResponseMetadata from(HermesApi.ChatResponse response, ChatResponse previousChatResponse) {
 		Assert.notNull(response, "HermesApi.ChatResponse must not be null");
 		DefaultUsage newUsage = getDefaultUsage(response);
-		Integer promptTokens = newUsage.getPromptTokens();
-		Integer generationTokens = newUsage.getCompletionTokens();
-		int totalTokens = newUsage.getTotalTokens();
-		if (previousChatResponse != null && previousChatResponse.getMetadata() != null
-				&& previousChatResponse.getMetadata().getUsage() != null) {
-			promptTokens += previousChatResponse.getMetadata().getUsage().getPromptTokens();
-			generationTokens += previousChatResponse.getMetadata().getUsage().getCompletionTokens();
-			totalTokens += previousChatResponse.getMetadata().getUsage().getTotalTokens();
-		}
-		DefaultUsage aggregatedUsage = new DefaultUsage(promptTokens, generationTokens, totalTokens);
+		DefaultUsage aggregatedUsage = getAggregatedUsage(previousChatResponse, newUsage);
 		String finishReason = null;
 		if (response.choices() != null && !response.choices().isEmpty()) {
 			finishReason = response.choices().get(0).finishReason();
@@ -148,30 +139,25 @@ public class HermesChatModel implements ChatModel {
 			.keyValue("finish_reason", finishReason).keyValue("id", response.id()).keyValue("created", response.created()).build();
 	}
 
+	@NonNull
+	private static DefaultUsage getAggregatedUsage(ChatResponse previousChatResponse, DefaultUsage newUsage) {
+		Integer promptTokens = newUsage.getPromptTokens();
+		Integer generationTokens = newUsage.getCompletionTokens();
+		int totalTokens = newUsage.getTotalTokens();
+		if (previousChatResponse != null && previousChatResponse.getMetadata().getUsage() != null) {
+			promptTokens += previousChatResponse.getMetadata().getUsage().getPromptTokens();
+			generationTokens += previousChatResponse.getMetadata().getUsage().getCompletionTokens();
+			totalTokens += previousChatResponse.getMetadata().getUsage().getTotalTokens();
+		}
+        return new DefaultUsage(promptTokens, generationTokens, totalTokens);
+	}
+
 	private static DefaultUsage getDefaultUsage(HermesApi.ChatResponse response) {
 		if (response.usage() != null) {
 			return new DefaultUsage(Optional.ofNullable(response.usage().promptTokens()).orElse(0),
 				Optional.ofNullable(response.usage().completionTokens()).orElse(0));
 		}
 		return new DefaultUsage(0, 0);
-	}
-
-	private static String getResponseContent(HermesApi.ChatResponse response) {
-		if (response.choices() == null || response.choices().isEmpty()) return "";
-		var choice = response.choices().get(0);
-		HermesApi.Message msg = choice.message() != null ? choice.message() : choice.delta();
-		if (msg == null || msg.content() == null) return "";
-		// Content is Object — String or List<ContentPart>
-		if (msg.content() instanceof String s) return s;
-		return msg.content().toString();
-	}
-
-	private static List<HermesApi.Message.ToolCall> getResponseToolCalls(HermesApi.ChatResponse response) {
-		if (response.choices() == null || response.choices().isEmpty()) return List.of();
-		var choice = response.choices().get(0);
-		HermesApi.Message msg = choice.message() != null ? choice.message() : choice.delta();
-		if (msg == null || msg.toolCalls() == null) return List.of();
-		return msg.toolCalls();
 	}
 
 	@Override
@@ -191,15 +177,16 @@ public class HermesChatModel implements ChatModel {
 					() -> observationContext, this.observationRegistry)
 			.observe(() -> {
 				HermesApi.ChatResponse apiResp = this.retryTemplate.execute(ctx -> this.chatApi.chat(request, headers));
-				List<AssistantMessage.ToolCall> toolCalls = getResponseToolCalls(apiResp).stream()
+				List<AssistantMessage.ToolCall> toolCalls = HermesApiHelper.getToolCalls(apiResp).stream()
 					.map(tc -> new AssistantMessage.ToolCall(tc.id(),
 						tc.type() != null ? tc.type() : "function", tc.function().name(), tc.function().arguments()))
 					.toList();
 				var assistantMessage = AssistantMessage.builder()
-					.content(getResponseContent(apiResp)).properties(Map.of()).toolCalls(toolCalls).build();
+					.content(HermesApiHelper.getContent(apiResp)).properties(Map.of()).toolCalls(toolCalls).build();
 				String finishReason = null;
-				if (apiResp.choices() != null && !apiResp.choices().isEmpty())
+				if (apiResp.choices() != null && !apiResp.choices().isEmpty()) {
 					finishReason = apiResp.choices().get(0).finishReason();
+				}
 				var genMeta = ChatGenerationMetadata.builder().finishReason(finishReason).build();
 				var generator = new Generation(assistantMessage, genMeta);
 				ChatResponse cr = new ChatResponse(List.of(generator), from(apiResp, previousChatResponse));
@@ -237,8 +224,8 @@ public class HermesChatModel implements ChatModel {
 			Flux<HermesApi.ChatResponse> apiFlux = this.chatApi.streamingChat(request, headers);
 
 			Flux<ChatResponse> chatResponse = apiFlux.map(chunk -> {
-				String content = getResponseContent(chunk);
-				List<AssistantMessage.ToolCall> toolCalls = getResponseToolCalls(chunk).stream()
+				String content = HermesApiHelper.getContent(chunk);
+			List<AssistantMessage.ToolCall> toolCalls = HermesApiHelper.getToolCalls(chunk).stream()
 					.map(tc -> new AssistantMessage.ToolCall(tc.id(),
 						tc.type() != null ? tc.type() : "function", tc.function().name(), tc.function().arguments()))
 					.toList();
@@ -285,7 +272,9 @@ public class HermesChatModel implements ChatModel {
 			requestOptions.setInternalToolExecutionEnabled(ModelOptionsUtils.mergeOption(runtimeOptions.getInternalToolExecutionEnabled(), this.defaultOptions.getInternalToolExecutionEnabled()));
 			requestOptions.setToolNames(ToolCallingChatOptions.mergeToolNames(runtimeOptions.getToolNames(), this.defaultOptions.getToolNames()));
 			requestOptions.setToolCallbacks(ToolCallingChatOptions.mergeToolCallbacks(runtimeOptions.getToolCallbacks(), this.defaultOptions.getToolCallbacks()));
-			requestOptions.setToolContext(ToolCallingChatOptions.mergeToolContext(runtimeOptions.getToolContext(), this.defaultOptions.getToolContext()));
+			requestOptions.setToolContext(ToolCallingChatOptions.mergeToolContext(
+				runtimeOptions.getToolContext() != null ? runtimeOptions.getToolContext() : Map.of(),
+				this.defaultOptions.getToolContext() != null ? this.defaultOptions.getToolContext() : Map.of()));
 		} else {
 			requestOptions.setInternalToolExecutionEnabled(this.defaultOptions.getInternalToolExecutionEnabled());
 			requestOptions.setToolNames(this.defaultOptions.getToolNames());
@@ -324,8 +313,15 @@ public class HermesChatModel implements ChatModel {
 		HermesChatOptions requestOptions;
 		if (prompt.getOptions() instanceof HermesChatOptions ho) {
 			requestOptions = ho;
+		} else if (prompt.getOptions() != null) {
+			requestOptions = HermesChatOptions.fromOptions(HermesChatOptions.builder().build());
+			if (prompt.getOptions().getTemperature() != null) requestOptions.setTemperature(prompt.getOptions().getTemperature());
+			if (prompt.getOptions().getTopP() != null) requestOptions.setTopP(prompt.getOptions().getTopP());
+			if (prompt.getOptions().getMaxTokens() != null) requestOptions.setMaxTokens(prompt.getOptions().getMaxTokens());
+			if (prompt.getOptions().getStopSequences() != null) requestOptions.setStop(prompt.getOptions().getStopSequences());
+			requestOptions.setModel(prompt.getOptions().getModel() != null ? prompt.getOptions().getModel() : this.defaultOptions.getModel());
 		} else {
-			requestOptions = HermesChatOptions.fromOptions((HermesChatOptions) prompt.getOptions());
+			requestOptions = this.defaultOptions;
 		}
 
 		HermesApi.ChatRequest.Builder b = HermesApi.ChatRequest.builder(requestOptions.getModel()).stream(stream)
@@ -333,6 +329,7 @@ public class HermesChatModel implements ChatModel {
 			.frequencyPenalty(requestOptions.getFrequencyPenalty()).presencePenalty(requestOptions.getPresencePenalty())
 			.seed(requestOptions.getSeed());
 
+		if (requestOptions.getThinking() != null) b.thinking(requestOptions.getThinking());
 		if (requestOptions.getMaxTokens() != null) b.maxCompletionTokens(requestOptions.getMaxTokens());
 		if (requestOptions.getStop() != null && !requestOptions.getStop().isEmpty()) b.stop(requestOptions.getStop());
 		if (requestOptions.getUser() != null) b.user(requestOptions.getUser());
