@@ -17,11 +17,16 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Tag("integration")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class HermesIntegrationTests {
+
+	private static final Logger log = LoggerFactory.getLogger(HermesIntegrationTests.class);
 
 	private static final String BASE_URL = "http://localhost:8642";
 	private static final String API_KEY = "change-me-local-dev";
@@ -113,7 +118,7 @@ public class HermesIntegrationTests {
 		assertThat(response.model()).isEqualTo("hermes-agent");
 		assertThat(response.choices()).hasSize(1);
 		assertThat(response.choices().get(0).message().role()).isEqualTo(Role.ASSISTANT);
-		System.out.println("Chat response: " + response.choices().get(0).message().content());
+		log.info("Chat response: {}", response.choices().get(0).message().content());
 	}
 
 	@Test
@@ -128,7 +133,7 @@ public class HermesIntegrationTests {
 		assertThat(chunks).isNotNull().isNotEmpty();
 		var first = chunks.get(0);
 		assertThat(first.choices().get(0).delta()).isNotNull();
-		System.out.println("Streaming chunks received: " + chunks.size());
+		log.info("Streaming chunks received: {}", chunks.size());
 	}
 
 	// ==============================
@@ -143,7 +148,7 @@ public class HermesIntegrationTests {
 		assertThat(response.getResults()).isNotEmpty();
 		var text = response.getResult().getOutput().getText();
 		assertThat(text).isNotBlank();
-		System.out.println("Spring AI ChatModel: " + text);
+		log.info("Spring AI ChatModel: {}", text);
 	}
 
 	// ==============================
@@ -177,6 +182,6 @@ public class HermesIntegrationTests {
 		assertThat(run).isNotNull();
 		assertThat(run.runId()).isNotEmpty();
 		assertThat(run.status()).isIn("started", "completed", "running");
-		System.out.println("Run created: " + run.runId() + " status=" + run.status());
+		log.info("Run created: {} status={}", run.runId(), run.status());
 	}
 }

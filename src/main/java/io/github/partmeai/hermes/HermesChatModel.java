@@ -231,8 +231,9 @@ public class HermesChatModel implements ChatModel {
 					.toList();
 				var msg = AssistantMessage.builder().content(content).properties(Map.of()).toolCalls(toolCalls).build();
 				String finishReason = null;
-				if (chunk.choices() != null && !chunk.choices().isEmpty())
+				if (chunk.choices() != null && !chunk.choices().isEmpty()) {
 					finishReason = chunk.choices().get(0).finishReason();
+				}
 				var genMeta = ChatGenerationMetadata.builder().finishReason(finishReason).build();
 				return new ChatResponse(List.of(new Generation(msg, genMeta)), from(chunk, previousChatResponse));
 			});
@@ -243,8 +244,9 @@ public class HermesChatModel implements ChatModel {
 						ToolExecutionResult toolExecutionResult;
 						try { ToolCallReactiveContextHolder.setContext(ctx); toolExecutionResult = this.toolCallingManager.executeToolCalls(prompt, response); }
 						finally { ToolCallReactiveContextHolder.clearContext(); }
-						if (toolExecutionResult.returnDirect())
+						if (toolExecutionResult.returnDirect()) {
 							return Flux.just(ChatResponse.builder().from(response).generations(ToolExecutionResult.buildGenerations(toolExecutionResult)).build());
+						}
 						return this.internalStream(new Prompt(toolExecutionResult.conversationHistory(), prompt.getOptions()), response);
 					}).subscribeOn(Schedulers.boundedElastic());
 				}
@@ -373,8 +375,9 @@ public class HermesChatModel implements ChatModel {
 		public Builder retryTemplate(RetryTemplate v) { retryTemplate = v; return this; }
 
 		public HermesChatModel build() {
-			if (toolCallingManager != null)
+			if (toolCallingManager != null) {
 				return new HermesChatModel(api, defaultOptions, toolCallingManager, observationRegistry, toolExecutionEligibilityPredicate, retryTemplate);
+			}
 			return new HermesChatModel(api, defaultOptions, DEFAULT_TOOL_CALLING_MANAGER, observationRegistry, toolExecutionEligibilityPredicate, retryTemplate);
 		}
 	}
