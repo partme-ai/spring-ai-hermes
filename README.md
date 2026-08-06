@@ -1,178 +1,170 @@
+<a id="readme-top"></a>
+
+<div align="center">
+
 # spring-ai-hermes
 
-Spring AI 模型集成：将 Hermes API Server 桥接到 Spring AI 的 `ChatModel` 接口。
+**Spring Boot Starter for spring-ai-hermes**
 
-通过 Hermes API Server 的 OpenAI 兼容端点实现：
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.easy4j/spring-ai-hermes)](https://github.com/easy-4-java/spring-ai-hermes)
+[![Java](https://img.shields.io/badge/Java-17-orange)](#3-requirements-and-compatibility)
+[![License](https://img.shields.io/badge/license-Apache-2.0-green)](https://www.apache.org/licenses/LICENSE-2.0)
 
-- `POST /v1/chat/completions` → `ChatModel`（流式 + 非流式）
-- `POST /v1/responses` → Responses API（对话状态持久化）
-- `GET /v1/models` → 模型发现
-- `POST /v1/runs` → Runs API（长会话流式执行）
-- `GET /health` + `/v1/capabilities` → 健康检查与能力发现
+[简体中文](./README.zh-CN.md) | [English](./README.md)
 
-## 快速开始
+[Positioning](#1-positioning) · [Capabilities](#2-core-capabilities) ·
+[Dependency](#5-dependency) · [Quick Start](#6-quick-start) ·
+[Configuration](#7-configuration-reference) · [Versions](#9-version-lines-and-compatibility) ·
+[Build](#10-build-and-test) · [License](#12-license)
 
-### 1. 添加依赖
+</div>
+
+---
+
+> **Current Version**：`3.5.x.20260612-SNAPSHOT`<br>
+> **JDK Baseline**：`17`<br>
+> **Group ID**：`io.github.easy4j`<br>
+> **Artifact ID**：`spring-ai-hermes`<br>
+> **License**：Apache License 2.0<br>
+
+## 1. Positioning
+
+**spring-ai-hermes** is a Spring Boot starter that integrates **spring-ai-hermes** for applications using spring-ai-hermes. It provides auto-configuration, property binding, and ready-to-use beans so that applications can consume spring-ai-hermes capabilities with minimal setup.
+
+| Dimension | Description |
+|---|---|
+| Type | Spring Boot Starter |
+| Consumers | Spring Boot applications using spring-ai-hermes |
+| Core Capabilities | auto-configuration, property binding, ready-to-use beans for spring-ai-hermes |
+| JDK | `17` |
+| Coordinates | `io.github.easy4j:spring-ai-hermes:3.5.x.20260612-SNAPSHOT` |
+| Config Prefix | `spring.ai.hermes` |
+
+## 2. Core Capabilities
+
+| Capability | Status | Description |
+|---|:---:|---|
+| Auto-configuration | ✅ Stable | Registers spring-ai-hermes beans automatically |
+| Property Binding | ✅ Stable | Binds `spring.ai.hermes.*` to `Properties` |
+| `HermesApi` bean | ✅ Stable | Auto-registered via HermesAutoConfiguration |
+
+## 3. Requirements and Compatibility
+
+| Dependency | Minimum | Evidence |
+|---|---:|---|
+| JDK | `17` | `pom.xml` |
+| Spring Boot | `3.x` | `pom.xml` parent |
+| Maven | `3.6+` | Maven Enforcer |
+
+## 4. Auto-configuration
+
+The starter auto-configures the following beans:
+
+| Bean | Condition | Missing Behavior |
+|---|---|---|
+| `HermesApi` | classpath + property | not created |
+| `HermesChatModel` | classpath + property | not created |
+| `HermesModelManager` | classpath + property | not created |
+
+Auto-configuration registration:
+
+- `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` (Spring Boot 2.7+ / 3.x / 4.x)
+- `META-INF/spring.factories` (Spring Boot 2.x legacy)
+
+## 5. Dependency
 
 ```xml
 <dependency>
-    <groupId>io.github.partmeai</groupId>
+    <groupId>io.github.easy4j</groupId>
     <artifactId>spring-ai-hermes</artifactId>
     <version>3.5.x.20260612-SNAPSHOT</version>
 </dependency>
 ```
 
-### 2. 配置
+No additional easy4j component dependencies.
+
+## 6. Quick Start
+
+### 6.1 Add dependency
+
+Add the dependency above to your `pom.xml`.
+
+### 6.2 Configure
 
 ```yaml
-spring:
-  ai:
-    hermes:
-      base-url: http://localhost:8642
-      api-server-key: your-api-key
-      model: hermes-agent
+spring.ai.hermes:
+  enabled: true
 ```
 
-> **认证说明：** 需要在 `RestClient.Builder` 和 `WebClient.Builder` 中手动配置 `Authorization: Bearer <key>` 请求头。
-
-### 3. 注入使用
+### 6.3 Use the bean
 
 ```java
-@RestController
-public class ChatController {
-
-    private final ChatModel chatModel;
-
-    public ChatController(ChatModel chatModel) {
-        this.chatModel = chatModel;
-    }
-
-    @GetMapping("/chat")
-    public String chat(@RequestParam String message) {
-        return chatModel.call(new Prompt(message))
-            .getResult().getOutput().getText();
-    }
-
-    @GetMapping("/chat/stream")
-    public Flux<String> chatStream(@RequestParam String message) {
-        return chatModel.stream(new Prompt(message))
-            .map(response -> response.getResult().getOutput().getText());
+@SpringBootApplication
+public class Application {
+    public static void main(String[] args) {
+        SpringApplication.run(Application.class, args);
     }
 }
 ```
 
-## Hermes 特有功能
-
-### 模型（纯展示性）
-
-Hermes 的 `model` 字段被接受但不影响实际 LLM 选择——模型在服务端配置：
+Then inject the auto-configured bean in your code:
 
 ```java
-HermesChatOptions options = HermesChatOptions.builder()
-    .model("hermes-agent")  // 默认模型 ID
-    .build();
+@Autowired
+private HermesApi hermesApi;
 ```
 
-### 会话与记忆
+## 7. Configuration Reference
 
-```java
-// 长期记忆作用域（max 256 字符）
-HermesChatOptions options = HermesChatOptions.builder()
-    .model("hermes-agent")
-    .hermesSessionKey("agent:main:webui:dm:user-42")   // → X-Hermes-Session-Key
-    .build();
+### 7.1 Config Prefix
 
-// 对话级别的会话标识
-HermesChatOptions options = HermesChatOptions.builder()
-    .model("hermes-agent")
-    .hermesSessionId("transcript-alpha")                // → X-Hermes-Session-Id
-    .build();
+`spring.ai.hermes`
+
+### 7.2 Configuration Items
+
+| Property | Type | Default | Required | Description | Sensitive |
+|---|---|---|:---:|---|:---:|
+| `spring.ai.hermes.enabled` | boolean | `true` | No | Enable the starter | No |
+<!-- additional properties below -->
+
+## 8. Version Lines and Compatibility
+
+| Branch | JDK | Spring Boot | Component Version | Status |
+|---|---:|---:|---|:---:|
+| `2.3.x` / `2.7.x` | `8+` | 2.3.x / 2.7.x | `1.0.x` | Maintenance |
+| `3.0.x` ~ `3.5.x` | `17` | 3.x | `2.0.x` | Maintenance |
+| `4.0.x` / `4.1.x` | `17+` | 4.x | `3.0.x` | Active |
+
+## 9. Build and Test
+
+```bash
+mvn clean verify
+mvn -pl spring-ai-hermes -am test
 ```
 
-### 内联图片
+## 10. Troubleshooting
 
-用户消息的 `content` 支持数组格式（文本 + 图片）：
+| Symptom | Diagnosis | Resolution |
+|---|---|---|
+| Bean not created | Check auto-configuration report | Verify `spring.ai.hermes.enabled=true` and classpath |
+| `ClassNotFoundException` | Missing dependency | Add the required module |
+| Version conflict | `mvn dependency:tree` | Use BOM for version alignment |
 
-```java
-var content = List.of(
-    new HermesApi.Message.ContentPart("text", "这是什么？", null),
-    new HermesApi.Message.ContentPart("image_url", null,
-        new HermesApi.Message.ImageUrl("https://example.com/cat.png", "high"))
-);
+## 11. Contribution
 
-var msg = HermesApi.Message.builder(HermesApi.Message.Role.USER)
-    .content(content)
-    .build();
-```
+1. Fork the repository.
+2. Create a feature branch.
+3. Run `mvn clean verify` before submitting.
+4. Submit a pull request.
 
-### Responses API（对话状态持久化）
+## 12. License
 
-```java
-// 创建带服务端状态的对话
-var req = new HermesApi.ResponseRequest("hermes-agent",
-    "What files are in my project?", "You are a coding assistant.",
-    null, null, true);
-var resp = api.responses(req);
+This project is licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0).
 
-// 多轮对话：previous_response_id 保持上下文
-var req2 = new HermesApi.ResponseRequest("hermes-agent",
-    "Show me the README", null, resp.id(), null, null);
-var resp2 = api.responses(req2);
+---
 
-// 或使用 conversation 参数自动链式
-var req3 = new HermesApi.ResponseRequest("hermes-agent",
-    "Run the tests", null, null, "my-project", null);
-```
+<div align="center">
 
-## API 参考
+[Back to top](#readme-top) · [Issues](https://github.com/easy-4-java/spring-ai-hermes/issues) · [Repository](https://github.com/easy-4-java/spring-ai-hermes)
 
-### ChatRequest 请求体字段
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `model` | String | 展示性模型 ID（`hermes-agent`），实际 LLM 服务端配置 |
-| `messages` | List\<Message\> | 对话消息列表 |
-| `stream` | Boolean | SSE 流式响应 |
-| `tools` | List\<Tool\> | 工具定义 |
-| `max_completion_tokens` | Integer | 最大输出 token 数 |
-| `temperature` | Double | 采样温度 |
-| `top_p` | Double | 核采样概率 |
-| `frequency_penalty` | Double | 频率惩罚 |
-| `presence_penalty` | Double | 存在惩罚 |
-| `seed` | Integer | 随机种子 |
-| `stop` | Object | 停止序列 |
-| `user` | String | 用户标识 |
-
-### HTTP 请求头
-
-| 请求头 | Builder | 说明 |
-|--------|---------|------|
-| `X-Hermes-Session-Key` | `.hermesSessionKey(...)` | 长期记忆作用域（max 256 字符） |
-| `X-Hermes-Session-Id` | `.hermesSessionId(...)` | 对话级会话标识 |
-
-### 完整端点列表
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/v1/chat/completions` | `chat()` / `streamingChat()` | 标准 Chat Completions |
-| `/v1/responses` | `responses()` / `getResponse()` / `deleteResponse()` | Responses API |
-| `/v1/models` | `listModels()` / `getModel()` | 模型发现 |
-| `/v1/runs` | `createRun()` / `getRun()` / `stopRun()` / `approveRun()` | Runs API |
-| `/v1/runs/{id}/events` | `streamRunEvents()` | 运行事件 SSE 流 |
-| `/v1/capabilities` | `getCapabilities()` | 能力发现 |
-| `/v1/skills` | `listSkills()` | 技能列表 |
-| `/v1/toolsets` | `listToolsets()` | 工具集列表 |
-| `/health` | `health()` / `healthDetailed()` | 健康检查 |
-
-## 配置属性
-
-| 属性 | 默认值 | 说明 |
-|------|--------|------|
-| `spring.ai.hermes.base-url` | `http://localhost:8642` | API Server 地址 |
-| `spring.ai.hermes.api-server-key` | | Bearer token |
-
-## 依赖关系
-
-- Spring Boot 3.4+
-- Spring AI 1.1.7+
-- JDK 17+
+</div>
