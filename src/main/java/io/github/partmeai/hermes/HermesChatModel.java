@@ -59,7 +59,6 @@ import io.github.partmeai.hermes.api.HermesApiHelper;
 import io.github.partmeai.hermes.api.HermesChatOptions;
 import io.github.partmeai.hermes.api.HermesModel;
 import io.github.partmeai.hermes.api.common.HermesApiConstants;
-import org.springframework.ai.retry.RetryUtils;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.util.Assert;
@@ -86,6 +85,8 @@ import org.springframework.util.StringUtils;
 @Slf4j
 public class HermesChatModel implements ChatModel {
 
+	private static final RetryTemplate DEFAULT_RETRY_TEMPLATE = RetryTemplate.builder().maxAttempts(1).build();
+
 	private static final ChatModelObservationConvention DEFAULT_OBSERVATION_CONVENTION =
 			new DefaultChatModelObservationConvention();
 
@@ -103,7 +104,7 @@ public class HermesChatModel implements ChatModel {
 	public HermesChatModel(HermesApi api, HermesChatOptions defaultOptions,
 			ToolCallingManager toolCallingManager, ObservationRegistry observationRegistry) {
 		this(api, defaultOptions, toolCallingManager, observationRegistry,
-				new DefaultToolExecutionEligibilityPredicate(), RetryUtils.DEFAULT_RETRY_TEMPLATE);
+				new DefaultToolExecutionEligibilityPredicate(), DEFAULT_RETRY_TEMPLATE);
 	}
 
 	public HermesChatModel(HermesApi api, HermesChatOptions defaultOptions,
@@ -238,7 +239,7 @@ public class HermesChatModel implements ChatModel {
 				return new ChatResponse(List.of(new Generation(msg, genMeta)), from(chunk, previousChatResponse));
 			});
 
-			Flux<ChatResponse> chatResponseFlux = chatResponse.flatMap(response -> {
+			Flux<ChatResponse> chatResponseFlux = chatResponse.concatMap(response -> {
 				if (this.toolExecutionEligibilityPredicate.isToolExecutionRequired(prompt.getOptions(), response)) {
 					return Flux.deferContextual(ctx -> {
 						ToolExecutionResult toolExecutionResult;
@@ -364,7 +365,7 @@ public class HermesChatModel implements ChatModel {
 		private ToolCallingManager toolCallingManager;
 		private ToolExecutionEligibilityPredicate toolExecutionEligibilityPredicate = new DefaultToolExecutionEligibilityPredicate();
 		private ObservationRegistry observationRegistry = ObservationRegistry.NOOP;
-		private RetryTemplate retryTemplate = RetryUtils.DEFAULT_RETRY_TEMPLATE;
+		private RetryTemplate retryTemplate = DEFAULT_RETRY_TEMPLATE;
 
 		private Builder() {}
 		public Builder api(HermesApi v) { api = v; return this; }

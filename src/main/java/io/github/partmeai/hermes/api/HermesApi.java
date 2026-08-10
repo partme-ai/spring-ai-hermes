@@ -18,6 +18,7 @@ package io.github.partmeai.hermes.api;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -28,6 +29,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import org.springframework.ai.retry.RetryUtils;
+import org.springframework.ai.model.ModelOptionsUtils;
 import org.springframework.http.MediaType;
 import org.springframework.util.Assert;
 import org.springframework.web.client.ResponseErrorHandler;
@@ -47,6 +49,8 @@ import org.springframework.web.reactive.function.client.WebClient;
 @Slf4j
 public final class HermesApi {
 
+	private static final String SSE_DONE = "[DONE]";
+
 	public static Builder builder() { return new Builder(); }
 
 	public static final String REQUEST_BODY_NULL_ERROR = "The request body can not be null.";
@@ -54,6 +58,7 @@ public final class HermesApi {
 	private final RestClient restClient;
 	private final WebClient webClient;
 	private final SseErrorHandler sseErrorHandler;
+	private final AtomicInteger activeStreams = new AtomicInteger();
 
 	// spotless:off
 	private HermesApi(String baseUrl, RestClient.Builder restClientBuilder, WebClient.Builder webClientBuilder,
@@ -82,6 +87,18 @@ public final class HermesApi {
 		return spec.body(chatRequest).retrieve().body(ChatResponse.class);
 	}
 
+	public Mono<ChatResponse> chatAsync(ChatRequest chatRequest) {
+		return chatAsync(chatRequest, Map.of());
+	}
+
+	public Mono<ChatResponse> chatAsync(ChatRequest chatRequest, Map<String, String> extraHeaders) {
+		Assert.notNull(chatRequest, REQUEST_BODY_NULL_ERROR);
+		Assert.isTrue(!chatRequest.stream(), "Stream mode must be disabled.");
+		var spec = this.webClient.post().uri(HermesApiConstants.V1_CHAT_COMPLETIONS);
+		extraHeaders.forEach(spec::header);
+		return spec.bodyValue(chatRequest).retrieve().bodyToMono(ChatResponse.class);
+	}
+
 	public Flux<ChatResponse> streamingChat(ChatRequest chatRequest) { return streamingChat(chatRequest, Map.of()); }
 
 	public Flux<ChatResponse> streamingChat(ChatRequest chatRequest, Map<String, String> extraHeaders) {
@@ -89,9 +106,21 @@ public final class HermesApi {
 		Assert.isTrue(chatRequest.stream(), "Request must set stream to true.");
 		var spec = this.webClient.post().uri(HermesApiConstants.V1_CHAT_COMPLETIONS).accept(MediaType.TEXT_EVENT_STREAM);
 		extraHeaders.forEach(spec::header);
-		return spec.body(Mono.just(chatRequest), ChatRequest.class).retrieve()
-			.bodyToFlux(ChatResponse.class).onErrorResume(sseErrorHandler::handle)
-			.handle((chunk, sink) -> { if (chunk.choices() != null && !chunk.choices().isEmpty()) sink.next(chunk); });
+		return Flux.defer(() -> {
+			this.activeStreams.incrementAndGet();
+			return spec.bodyValue(chatRequest).retrieve()
+				.bodyToFlux(String.class)
+				.takeUntil(SSE_DONE::equals)
+				.filter(data -> !SSE_DONE.equals(data))
+				.map(data -> ModelOptionsUtils.<ChatResponse>jsonToObject(data, ChatResponse.class))
+				.onErrorResume(this.sseErrorHandler::handle)
+				.filter(chunk -> chunk.choices() != null && !chunk.choices().isEmpty())
+				.doFinally(signal -> this.activeStreams.decrementAndGet());
+		});
+	}
+
+	public int getActiveStreamCount() {
+		return this.activeStreams.get();
 	}
 
 	// ========================================================================
@@ -105,6 +134,13 @@ public final class HermesApi {
 		var spec = this.restClient.post().uri(HermesApiConstants.V1_RESPONSES);
 		extraHeaders.forEach(spec::header);
 		return spec.body(request).retrieve().body(Response.class);
+	}
+
+	public Mono<Response> responsesAsync(ResponseRequest request, Map<String, String> extraHeaders) {
+		Assert.notNull(request, REQUEST_BODY_NULL_ERROR);
+		var spec = this.webClient.post().uri(HermesApiConstants.V1_RESPONSES);
+		extraHeaders.forEach(spec::header);
+		return spec.bodyValue(request).retrieve().bodyToMono(Response.class);
 	}
 
 	public Response getResponse(String responseId) {
@@ -123,6 +159,10 @@ public final class HermesApi {
 
 	public ListModelResponse listModels() {
 		return this.restClient.get().uri(HermesApiConstants.V1_MODELS).retrieve().body(ListModelResponse.class);
+	}
+
+	public Mono<ListModelResponse> listModelsAsync() {
+		return this.webClient.get().uri(HermesApiConstants.V1_MODELS).retrieve().bodyToMono(ListModelResponse.class);
 	}
 
 	public ModelResponse getModel(String modelId) {
