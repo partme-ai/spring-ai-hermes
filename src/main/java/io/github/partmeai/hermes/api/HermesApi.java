@@ -49,6 +49,8 @@ import org.springframework.web.reactive.function.client.WebClient;
 @Slf4j
 public final class HermesApi {
 
+	public static final int DEFAULT_MAX_CONCURRENT_REQUESTS = 512;
+
 	private static final String SSE_DONE = "[DONE]";
 
 	public static Builder builder() { return new Builder(); }
@@ -59,10 +61,13 @@ public final class HermesApi {
 	private final WebClient webClient;
 	private final SseErrorHandler sseErrorHandler;
 	private final AtomicInteger activeStreams = new AtomicInteger();
+	private final HermesRequestLimiter requestLimiter;
+	private final HermesStreamToolCallAggregator streamToolCallAggregator = new HermesStreamToolCallAggregator();
 
 	// spotless:off
 	private HermesApi(String baseUrl, RestClient.Builder restClientBuilder, WebClient.Builder webClientBuilder,
-			ResponseErrorHandler responseErrorHandler, SseErrorHandler sseErrorHandler) {
+			ResponseErrorHandler responseErrorHandler, SseErrorHandler sseErrorHandler,
+			int maxConcurrentRequests) {
 		this.restClient = restClientBuilder.clone().baseUrl(baseUrl)
 			.defaultHeaders(h -> { h.setContentType(MediaType.APPLICATION_JSON); h.setAccept(List.of(MediaType.APPLICATION_JSON)); })
 			.defaultStatusHandler(responseErrorHandler).build();
@@ -70,6 +75,9 @@ public final class HermesApi {
 			.defaultHeaders(h -> { h.setContentType(MediaType.APPLICATION_JSON); h.setAccept(List.of(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)); })
 			.build();
 		this.sseErrorHandler = sseErrorHandler;
+		this.requestLimiter = new HermesRequestLimiter(maxConcurrentRequests);
+		log.debug("Initialized Hermes API client: baseUrl={}, maxConcurrentRequests={}",
+				baseUrl, maxConcurrentRequests);
 	}
 	// spotless:on
 
@@ -84,7 +92,7 @@ public final class HermesApi {
 		Assert.isTrue(!chatRequest.stream(), "Stream mode must be disabled.");
 		var spec = this.restClient.post().uri(HermesApiConstants.V1_CHAT_COMPLETIONS);
 		extraHeaders.forEach(spec::header);
-		return spec.body(chatRequest).retrieve().body(ChatResponse.class);
+		return this.requestLimiter.execute(() -> spec.body(chatRequest).retrieve().body(ChatResponse.class));
 	}
 
 	public Mono<ChatResponse> chatAsync(ChatRequest chatRequest) {
@@ -96,7 +104,7 @@ public final class HermesApi {
 		Assert.isTrue(!chatRequest.stream(), "Stream mode must be disabled.");
 		var spec = this.webClient.post().uri(HermesApiConstants.V1_CHAT_COMPLETIONS);
 		extraHeaders.forEach(spec::header);
-		return spec.bodyValue(chatRequest).retrieve().bodyToMono(ChatResponse.class);
+		return this.requestLimiter.guard(spec.bodyValue(chatRequest).retrieve().bodyToMono(ChatResponse.class));
 	}
 
 	public Flux<ChatResponse> streamingChat(ChatRequest chatRequest) { return streamingChat(chatRequest, Map.of()); }
@@ -106,21 +114,39 @@ public final class HermesApi {
 		Assert.isTrue(chatRequest.stream(), "Request must set stream to true.");
 		var spec = this.webClient.post().uri(HermesApiConstants.V1_CHAT_COMPLETIONS).accept(MediaType.TEXT_EVENT_STREAM);
 		extraHeaders.forEach(spec::header);
-		return Flux.defer(() -> {
-			this.activeStreams.incrementAndGet();
-			return spec.bodyValue(chatRequest).retrieve()
+		return this.requestLimiter.guard(Flux.defer(() -> {
+			int active = this.activeStreams.incrementAndGet();
+			if (log.isTraceEnabled()) {
+				log.trace("Opened Hermes chat stream: activeStreams={}", active);
+			}
+			Flux<ChatResponse> chunks = spec.bodyValue(chatRequest).retrieve()
 				.bodyToFlux(String.class)
 				.takeUntil(SSE_DONE::equals)
 				.filter(data -> !SSE_DONE.equals(data))
 				.map(data -> ModelOptionsUtils.<ChatResponse>jsonToObject(data, ChatResponse.class))
-				.onErrorResume(this.sseErrorHandler::handle)
+				.onErrorResume(this.sseErrorHandler::handle);
+			return this.streamToolCallAggregator.aggregate(chunks)
 				.filter(chunk -> chunk.choices() != null && !chunk.choices().isEmpty())
-				.doFinally(signal -> this.activeStreams.decrementAndGet());
-		});
+				.doFinally(signal -> {
+					int remaining = this.activeStreams.decrementAndGet();
+					if (log.isTraceEnabled()) {
+						log.trace("Closed Hermes chat stream: signal={}, activeStreams={}",
+								signal, remaining);
+					}
+				});
+		}));
 	}
 
 	public int getActiveStreamCount() {
 		return this.activeStreams.get();
+	}
+
+	public int getInFlightRequestCount() {
+		return this.requestLimiter.getInFlightRequestCount();
+	}
+
+	public int getMaxConcurrentRequests() {
+		return this.requestLimiter.getMaxConcurrentRequests();
 	}
 
 	// ========================================================================
@@ -133,24 +159,27 @@ public final class HermesApi {
 		Assert.notNull(request, REQUEST_BODY_NULL_ERROR);
 		var spec = this.restClient.post().uri(HermesApiConstants.V1_RESPONSES);
 		extraHeaders.forEach(spec::header);
-		return spec.body(request).retrieve().body(Response.class);
+		return this.requestLimiter.execute(() -> spec.body(request).retrieve().body(Response.class));
 	}
 
 	public Mono<Response> responsesAsync(ResponseRequest request, Map<String, String> extraHeaders) {
 		Assert.notNull(request, REQUEST_BODY_NULL_ERROR);
 		var spec = this.webClient.post().uri(HermesApiConstants.V1_RESPONSES);
 		extraHeaders.forEach(spec::header);
-		return spec.bodyValue(request).retrieve().bodyToMono(Response.class);
+		return this.requestLimiter.guard(spec.bodyValue(request).retrieve().bodyToMono(Response.class));
 	}
 
 	public Response getResponse(String responseId) {
 		Assert.hasText(responseId, "responseId must not be empty");
-		return this.restClient.get().uri(HermesApiConstants.V1_RESPONSES_BY_ID, responseId).retrieve().body(Response.class);
+		return this.requestLimiter.execute(() -> this.restClient.get()
+			.uri(HermesApiConstants.V1_RESPONSES_BY_ID, responseId).retrieve().body(Response.class));
 	}
 
 	public boolean deleteResponse(String responseId) {
 		Assert.hasText(responseId, "responseId must not be empty");
-		return this.restClient.delete().uri(HermesApiConstants.V1_RESPONSES_BY_ID, responseId).retrieve().toBodilessEntity().getStatusCode().is2xxSuccessful();
+		return this.requestLimiter.execute(() -> this.restClient.delete()
+			.uri(HermesApiConstants.V1_RESPONSES_BY_ID, responseId).retrieve()
+			.toBodilessEntity().getStatusCode().is2xxSuccessful());
 	}
 
 	// ========================================================================
@@ -158,16 +187,19 @@ public final class HermesApi {
 	// ========================================================================
 
 	public ListModelResponse listModels() {
-		return this.restClient.get().uri(HermesApiConstants.V1_MODELS).retrieve().body(ListModelResponse.class);
+		return this.requestLimiter.execute(() -> this.restClient.get()
+			.uri(HermesApiConstants.V1_MODELS).retrieve().body(ListModelResponse.class));
 	}
 
 	public Mono<ListModelResponse> listModelsAsync() {
-		return this.webClient.get().uri(HermesApiConstants.V1_MODELS).retrieve().bodyToMono(ListModelResponse.class);
+		return this.requestLimiter.guard(this.webClient.get().uri(HermesApiConstants.V1_MODELS)
+			.retrieve().bodyToMono(ListModelResponse.class));
 	}
 
 	public ModelResponse getModel(String modelId) {
 		Assert.hasText(modelId, "modelId must not be empty");
-		return this.restClient.get().uri(HermesApiConstants.V1_MODELS_BY_ID, modelId).retrieve().body(ModelResponse.class);
+		return this.requestLimiter.execute(() -> this.restClient.get()
+			.uri(HermesApiConstants.V1_MODELS_BY_ID, modelId).retrieve().body(ModelResponse.class));
 	}
 
 	// ========================================================================
@@ -175,15 +207,18 @@ public final class HermesApi {
 	// ========================================================================
 
 	public Map<String, Object> health() {
-		return this.restClient.get().uri(HermesApiConstants.HEALTH).retrieve().body(Map.class);
+		return this.requestLimiter.execute(() -> this.restClient.get()
+			.uri(HermesApiConstants.HEALTH).retrieve().body(Map.class));
 	}
 
 	public Map<String, Object> healthV1() {
-		return this.restClient.get().uri(HermesApiConstants.V1_HEALTH).retrieve().body(Map.class);
+		return this.requestLimiter.execute(() -> this.restClient.get()
+			.uri(HermesApiConstants.V1_HEALTH).retrieve().body(Map.class));
 	}
 
 	public Map<String, Object> healthDetailed() {
-		return this.restClient.get().uri(HermesApiConstants.HEALTH_DETAILED).retrieve().body(Map.class);
+		return this.requestLimiter.execute(() -> this.restClient.get()
+			.uri(HermesApiConstants.HEALTH_DETAILED).retrieve().body(Map.class));
 	}
 
 	// ========================================================================
@@ -191,17 +226,20 @@ public final class HermesApi {
 	// ========================================================================
 
 	public Capabilities getCapabilities() {
-		return this.restClient.get().uri(HermesApiConstants.V1_CAPABILITIES).retrieve().body(Capabilities.class);
+		return this.requestLimiter.execute(() -> this.restClient.get()
+			.uri(HermesApiConstants.V1_CAPABILITIES).retrieve().body(Capabilities.class));
 	}
 
 	@SuppressWarnings("unchecked")
 	public List<Map<String, Object>> listSkills() {
-		return (List<Map<String, Object>>) (List<?>) this.restClient.get().uri(HermesApiConstants.V1_SKILLS).retrieve().body(List.class);
+		return this.requestLimiter.execute(() -> (List<Map<String, Object>>) (List<?>) this.restClient
+			.get().uri(HermesApiConstants.V1_SKILLS).retrieve().body(List.class));
 	}
 
 	@SuppressWarnings("unchecked")
 	public List<Map<String, Object>> listToolsets() {
-		return (List<Map<String, Object>>) (List<?>) this.restClient.get().uri(HermesApiConstants.V1_TOOLSETS).retrieve().body(List.class);
+		return this.requestLimiter.execute(() -> (List<Map<String, Object>>) (List<?>) this.restClient
+			.get().uri(HermesApiConstants.V1_TOOLSETS).retrieve().body(List.class));
 	}
 
 	// ========================================================================
@@ -214,30 +252,39 @@ public final class HermesApi {
 		Assert.notNull(request, REQUEST_BODY_NULL_ERROR);
 		var spec = this.restClient.post().uri(HermesApiConstants.V1_RUNS);
 		extraHeaders.forEach(spec::header);
-		return spec.body(request).retrieve().body(Run.class);
+		return this.requestLimiter.execute(() -> spec.body(request).retrieve().body(Run.class));
 	}
 
 	public Run getRun(String runId) {
 		Assert.hasText(runId, "runId must not be empty");
-		return this.restClient.get().uri(HermesApiConstants.V1_RUNS_BY_ID, runId).retrieve().body(Run.class);
+		return this.requestLimiter.execute(() -> this.restClient.get()
+			.uri(HermesApiConstants.V1_RUNS_BY_ID, runId).retrieve().body(Run.class));
 	}
 
 	@SuppressWarnings("unchecked")
 	public Flux<Map<String, Object>> streamRunEvents(String runId) {
 		Assert.hasText(runId, "runId must not be empty");
-		return this.webClient.get().uri(HermesApiConstants.V1_RUNS_EVENTS, runId)
+		return this.requestLimiter.guard(this.webClient.get().uri(HermesApiConstants.V1_RUNS_EVENTS, runId)
 			.accept(MediaType.TEXT_EVENT_STREAM).retrieve().bodyToFlux(Map.class)
-			.map(m -> (Map<String, Object>) m);
+			.map(m -> (Map<String, Object>) m));
 	}
 
 	public void stopRun(String runId) {
 		Assert.hasText(runId, "runId must not be empty");
-		this.restClient.post().uri(HermesApiConstants.V1_RUNS_STOP, runId).retrieve().toBodilessEntity();
+		this.requestLimiter.execute(() -> {
+			this.restClient.post().uri(HermesApiConstants.V1_RUNS_STOP, runId)
+				.retrieve().toBodilessEntity();
+			return null;
+		});
 	}
 
 	public void approveRun(String runId, Map<String, Object> decision) {
 		Assert.hasText(runId, "runId must not be empty");
-		this.restClient.post().uri(HermesApiConstants.V1_RUNS_APPROVAL, runId).body(decision).retrieve().toBodilessEntity();
+		this.requestLimiter.execute(() -> {
+			this.restClient.post().uri(HermesApiConstants.V1_RUNS_APPROVAL, runId)
+				.body(decision).retrieve().toBodilessEntity();
+			return null;
+		});
 	}
 
 	// ========================================================================
@@ -246,64 +293,76 @@ public final class HermesApi {
 
 	@SuppressWarnings("unchecked")
 	public List<Session> listSessions() {
-		return (List<Session>) (List<?>) this.restClient.get().uri(HermesApiConstants.API_SESSIONS).retrieve().body(List.class);
+		return this.requestLimiter.execute(() -> (List<Session>) (List<?>) this.restClient
+			.get().uri(HermesApiConstants.API_SESSIONS).retrieve().body(List.class));
 	}
 
 	/** 分页列出 sessions。 */
 	public List<Session> listSessions(Integer limit, Integer offset, String source, Boolean includeChildren) {
-		var uri = this.restClient.get().uri(b -> {
-			var u = b.path(HermesApiConstants.API_SESSIONS);
-			if (limit != null) u.queryParam("limit", limit);
-			if (offset != null) u.queryParam("offset", offset);
-			if (source != null) u.queryParam("source", source);
-			if (includeChildren != null) u.queryParam("include_children", includeChildren);
-			return u.build();
+		return this.requestLimiter.execute(() -> {
+			var uri = this.restClient.get().uri(b -> {
+				var u = b.path(HermesApiConstants.API_SESSIONS);
+				if (limit != null) u.queryParam("limit", limit);
+				if (offset != null) u.queryParam("offset", offset);
+				if (source != null) u.queryParam("source", source);
+				if (includeChildren != null) u.queryParam("include_children", includeChildren);
+				return u.build();
+			});
+			@SuppressWarnings("unchecked")
+			List<Session> sessions = (List<Session>) (List<?>) uri.retrieve().body(List.class);
+			return sessions;
 		});
-		@SuppressWarnings("unchecked")
-		List<Session> sessions = (List<Session>) (List<?>) uri.retrieve().body(List.class);
-		return sessions;
 	}
 
 	public Session createSession(SessionCreateRequest request) {
-		return this.restClient.post().uri(HermesApiConstants.API_SESSIONS).body(request).retrieve().body(Session.class);
+		return this.requestLimiter.execute(() -> this.restClient.post()
+			.uri(HermesApiConstants.API_SESSIONS).body(request).retrieve().body(Session.class));
 	}
 
 	public Session getSession(String sessionId) {
-		return this.restClient.get().uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).retrieve().body(Session.class);
+		return this.requestLimiter.execute(() -> this.restClient.get()
+			.uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).retrieve().body(Session.class));
 	}
 
 	public Session updateSession(String sessionId, Map<String, Object> patch) {
-		return this.restClient.patch().uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).body(patch).retrieve().body(Session.class);
+		return this.requestLimiter.execute(() -> this.restClient.patch()
+			.uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).body(patch)
+			.retrieve().body(Session.class));
 	}
 
 	public boolean deleteSession(String sessionId) {
 		Assert.hasText(sessionId, "sessionId must not be empty");
-		return this.restClient.delete().uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).retrieve().toBodilessEntity().getStatusCode().is2xxSuccessful();
+		return this.requestLimiter.execute(() -> this.restClient.delete()
+			.uri(HermesApiConstants.API_SESSIONS_BY_ID, sessionId).retrieve()
+			.toBodilessEntity().getStatusCode().is2xxSuccessful());
 	}
 
 	@SuppressWarnings("unchecked")
 	public List<Map<String, Object>> getSessionMessages(String sessionId) {
-		return (List<Map<String, Object>>) (List<?>) this.restClient.get()
-			.uri(HermesApiConstants.API_SESSIONS_MESSAGES, sessionId).retrieve().body(List.class);
+		return this.requestLimiter.execute(() -> (List<Map<String, Object>>) (List<?>) this.restClient.get()
+			.uri(HermesApiConstants.API_SESSIONS_MESSAGES, sessionId).retrieve().body(List.class));
 	}
 
 	public Session forkSession(String sessionId, String title) {
-		return this.restClient.post().uri(HermesApiConstants.API_SESSIONS_FORK, sessionId)
-			.body(title != null ? Map.of("title", title) : Map.of()).retrieve().body(Session.class);
+		return this.requestLimiter.execute(() -> this.restClient.post()
+			.uri(HermesApiConstants.API_SESSIONS_FORK, sessionId)
+			.body(title != null ? Map.of("title", title) : Map.of()).retrieve().body(Session.class));
 	}
 
 	public ChatResponse sessionChat(String sessionId, String input) {
 		Assert.hasText(sessionId, "sessionId must not be empty");
 		Assert.hasText(input, "input must not be empty");
-		return this.restClient.post().uri(HermesApiConstants.API_SESSIONS_CHAT, sessionId)
-			.body(Map.of("input", input)).retrieve().body(ChatResponse.class);
+		return this.requestLimiter.execute(() -> this.restClient.post()
+			.uri(HermesApiConstants.API_SESSIONS_CHAT, sessionId)
+			.body(Map.of("input", input)).retrieve().body(ChatResponse.class));
 	}
 
 	@SuppressWarnings("unchecked")
 	public Flux<Map<String, Object>> streamSessionChat(String sessionId, String input) {
-		return this.webClient.post().uri(HermesApiConstants.API_SESSIONS_CHAT_STREAM, sessionId)
+		return this.requestLimiter.guard(this.webClient.post()
+			.uri(HermesApiConstants.API_SESSIONS_CHAT_STREAM, sessionId)
 			.accept(MediaType.TEXT_EVENT_STREAM).bodyValue(Map.of("input", input)).retrieve()
-			.bodyToFlux(Map.class).map(m -> (Map<String, Object>) m);
+			.bodyToFlux(Map.class).map(m -> (Map<String, Object>) m));
 	}
 
 	// ========================================================================
@@ -395,8 +454,12 @@ public final class HermesApi {
 		public record ImageUrl(@JsonProperty("url") String url, @JsonProperty("detail") String detail) {}
 
 		@JsonInclude(JsonInclude.Include.NON_NULL) @JsonIgnoreProperties(ignoreUnknown = true)
-		public record ToolCall(@JsonProperty("id") String id, @JsonProperty("type") String type,
-				@JsonProperty("function") ToolCallFunction function) {}
+		public record ToolCall(@JsonProperty("index") Integer index, @JsonProperty("id") String id,
+				@JsonProperty("type") String type, @JsonProperty("function") ToolCallFunction function) {
+			public ToolCall(String id, String type, ToolCallFunction function) {
+				this(null, id, type, function);
+			}
+		}
 
 		@JsonInclude(JsonInclude.Include.NON_NULL) @JsonIgnoreProperties(ignoreUnknown = true)
 		public record ToolCallFunction(@JsonProperty("name") String name, @JsonProperty("arguments") String arguments) {}
@@ -514,42 +577,51 @@ public final class HermesApi {
 
 	@SuppressWarnings("unchecked")
 	public List<Map<String, Object>> listJobs() {
-		return (List<Map<String, Object>>) (List<?>) this.restClient.get().uri(HermesApiConstants.API_JOBS).retrieve().body(List.class);
+		return this.requestLimiter.execute(() -> (List<Map<String, Object>>) (List<?>) this.restClient
+			.get().uri(HermesApiConstants.API_JOBS).retrieve().body(List.class));
 	}
 
 	@SuppressWarnings("unchecked")
 	public Map<String, Object> createJob(Map<String, Object> job) {
-		return this.restClient.post().uri(HermesApiConstants.API_JOBS).body(job).retrieve().body(Map.class);
+		return this.requestLimiter.execute(() -> this.restClient.post()
+			.uri(HermesApiConstants.API_JOBS).body(job).retrieve().body(Map.class));
 	}
 
 	@SuppressWarnings("unchecked")
 	public Map<String, Object> getJob(String jobId) {
-		return this.restClient.get().uri(HermesApiConstants.API_JOBS_BY_ID, jobId).retrieve().body(Map.class);
+		return this.requestLimiter.execute(() -> this.restClient.get()
+			.uri(HermesApiConstants.API_JOBS_BY_ID, jobId).retrieve().body(Map.class));
 	}
 
 	@SuppressWarnings("unchecked")
 	public Map<String, Object> updateJob(String jobId, Map<String, Object> patch) {
-		return this.restClient.patch().uri(HermesApiConstants.API_JOBS_BY_ID, jobId).body(patch).retrieve().body(Map.class);
+		return this.requestLimiter.execute(() -> this.restClient.patch()
+			.uri(HermesApiConstants.API_JOBS_BY_ID, jobId).body(patch).retrieve().body(Map.class));
 	}
 
 	public boolean deleteJob(String jobId) {
 		Assert.hasText(jobId, "jobId must not be empty");
-		return this.restClient.delete().uri(HermesApiConstants.API_JOBS_BY_ID, jobId).retrieve().toBodilessEntity().getStatusCode().is2xxSuccessful();
+		return this.requestLimiter.execute(() -> this.restClient.delete()
+			.uri(HermesApiConstants.API_JOBS_BY_ID, jobId).retrieve()
+			.toBodilessEntity().getStatusCode().is2xxSuccessful());
 	}
 
 	@SuppressWarnings("unchecked")
 	public Map<String, Object> pauseJob(String jobId) {
-		return this.restClient.post().uri(HermesApiConstants.API_JOBS_PAUSE, jobId).retrieve().body(Map.class);
+		return this.requestLimiter.execute(() -> this.restClient.post()
+			.uri(HermesApiConstants.API_JOBS_PAUSE, jobId).retrieve().body(Map.class));
 	}
 
 	@SuppressWarnings("unchecked")
 	public Map<String, Object> resumeJob(String jobId) {
-		return this.restClient.post().uri(HermesApiConstants.API_JOBS_RESUME, jobId).retrieve().body(Map.class);
+		return this.requestLimiter.execute(() -> this.restClient.post()
+			.uri(HermesApiConstants.API_JOBS_RESUME, jobId).retrieve().body(Map.class));
 	}
 
 	@SuppressWarnings("unchecked")
 	public Map<String, Object> runJobNow(String jobId) {
-		return this.restClient.post().uri(HermesApiConstants.API_JOBS_RUN, jobId).retrieve().body(Map.class);
+		return this.requestLimiter.execute(() -> this.restClient.post()
+			.uri(HermesApiConstants.API_JOBS_RUN, jobId).retrieve().body(Map.class));
 	}
 
 	// ========================================================================
@@ -562,12 +634,15 @@ public final class HermesApi {
 		private WebClient.Builder webClientBuilder = WebClient.builder();
 		private ResponseErrorHandler responseErrorHandler = RetryUtils.DEFAULT_RESPONSE_ERROR_HANDLER;
 		private SseErrorHandler sseErrorHandler = SseErrorHandler.DEFAULT;
+		private int maxConcurrentRequests = DEFAULT_MAX_CONCURRENT_REQUESTS;
 
 		public Builder baseUrl(String v) { Assert.hasText(v, "baseUrl must not be empty"); baseUrl = v; return this; }
 		public Builder restClientBuilder(RestClient.Builder v) { Assert.notNull(v, "restClientBuilder must not be null"); restClientBuilder = v; return this; }
 		public Builder webClientBuilder(WebClient.Builder v) { Assert.notNull(v, "webClientBuilder must not be null"); webClientBuilder = v; return this; }
 		public Builder responseErrorHandler(ResponseErrorHandler v) { Assert.notNull(v, "responseErrorHandler must not be null"); responseErrorHandler = v; return this; }
 		public Builder sseErrorHandler(SseErrorHandler v) { Assert.notNull(v, "sseErrorHandler must not be null"); sseErrorHandler = v; return this; }
-		public HermesApi build() { return new HermesApi(baseUrl, restClientBuilder, webClientBuilder, responseErrorHandler, sseErrorHandler); }
+		public Builder maxConcurrentRequests(int v) { Assert.isTrue(v > 0, "maxConcurrentRequests must be greater than zero"); maxConcurrentRequests = v; return this; }
+		public HermesApi build() { return new HermesApi(baseUrl, restClientBuilder, webClientBuilder,
+			responseErrorHandler, sseErrorHandler, maxConcurrentRequests); }
 	}
 }
