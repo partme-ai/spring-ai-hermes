@@ -21,15 +21,13 @@ import reactor.core.publisher.Mono;
 import io.github.partmeai.hermes.api.HermesApi.ChatResponse;
 
 /**
- * Strategy for handling SSE parse errors during streaming chat completions.
- * <p>
- * SSE streams end with a {@code data: [DONE]} sentinel — a JSON array, not a
- * chat completion object. The Jackson SSE decoder fails to deserialize it, and
- * this handler decides whether to suppress that error (completing the stream
- * gracefully) or propagate it.
- * <p>
- * Custom implementations can be registered via
- * {@link HermesApi.Builder#sseErrorHandler(SseErrorHandler)}.
+ * SSE 解析异常处理策略。
+ *
+ * <p>用于决定流式聊天响应发生解析异常时，是将异常转换为空发布者并正常结束，
+ * 还是继续向下游传播。虽然当前客户端会先按字符串识别 {@code [DONE]} 结束标记，
+ * 该策略仍负责处理供应方返回的异常 SSE 数据和兼容性场景。</p>
+ *
+ * <p>可通过 {@link HermesApi.Builder#sseErrorHandler(SseErrorHandler)} 注册自定义策略。</p>
  *
  * @see HermesApi.Builder#sseErrorHandler(SseErrorHandler)
  * @see <a href="https://docs.hermes.ai/gateway/openai-http-api#streaming-sse">Hermes Streaming SSE</a>
@@ -38,10 +36,10 @@ import io.github.partmeai.hermes.api.HermesApi.ChatResponse;
 public interface SseErrorHandler {
 
 	/**
-	 * Inspect an SSE parse error and decide how to proceed.
-	 * @param cause the parse error thrown by the SSE decoder
-	 * @return {@code Mono.empty()} to suppress the error and complete the stream,
-	 *         or {@code Mono.error(cause)} to propagate it
+	 * 检查 SSE 解析异常并决定后续行为。
+	 *
+	 * @param cause SSE 解码或 JSON 映射产生的异常
+	 * @return 用于替代失败数据块的发布者；返回空发布者表示抑制异常，返回错误发布者表示传播异常
 	 */
 	Mono<ChatResponse> handle(Throwable cause);
 
@@ -50,12 +48,8 @@ public interface SseErrorHandler {
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Default handler: suppresses errors caused by the SSE {@code [DONE]}
-	 * sentinel, propagates everything else.
-	 * <p>
-	 * The {@code [DONE]} event is a JSON array, not a chat completion object.
-	 * Jackson throws a deserialization error with {@code START_ARRAY} token
-	 * targeting {@code ChatResponse}. This handler matches that signature.
+	 * 默认策略：仅抑制错误消息同时包含 {@code START_ARRAY} 与 {@code ChatResponse}
+	 * 的解析异常，其余异常原样传播。
 	 */
 	SseErrorHandler DEFAULT = cause -> {
 		String msg = cause.getMessage();
@@ -67,15 +61,9 @@ public interface SseErrorHandler {
 		return Mono.error(cause);
 	};
 
-	/**
-	 * Lenient handler: suppresses ALL SSE parse errors, always completing the
-	 * stream gracefully. Useful for debugging flaky providers.
-	 */
+	/** 宽松策略：抑制全部 SSE 解析异常并正常结束当前替代序列。 */
 	SseErrorHandler LENIENT = cause -> Mono.empty();
 
-	/**
-	 * Strict handler: never suppresses — every parse error propagates.
-	 * The caller must handle the {@code [DONE]} sentinel itself.
-	 */
+	/** 严格策略：不抑制任何解析异常，始终将原异常传播给下游。 */
 	SseErrorHandler STRICT = Mono::error;
 }

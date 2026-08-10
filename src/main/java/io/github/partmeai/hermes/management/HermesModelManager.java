@@ -14,11 +14,11 @@ import reactor.core.publisher.Mono;
 import org.springframework.util.Assert;
 
 /**
- * Manages Hermes model discovery via the API Server's {@code GET /v1/models} endpoint.
- * <p>
- * Model listings are cached briefly and concurrent reactive refreshes share one
- * upstream request. This prevents application startup or health probes from
- * amplifying identical discovery requests.
+ * Hermes 模型发现与缓存管理器。
+ *
+ * <p>通过 API Server 的 {@code GET /v1/models} 端点发现模型标识，并在短 TTL 内
+ * 缓存不可变结果。同步缓存失效由监视器串行刷新；响应式缓存失效通过共享且缓存的
+ * {@link Mono} 合并并发刷新，避免应用启动或健康检查放大相同的上游请求。</p>
  *
  * @author <a href="https://github.com/loong10k">Loong Wan</a>
  * @see <a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server">Hermes API Server</a>
@@ -26,20 +26,44 @@ import org.springframework.util.Assert;
 @Slf4j
 public class HermesModelManager {
 
+	/** 默认模型列表缓存时长。 */
 	public static final Duration DEFAULT_CACHE_TTL = Duration.ofSeconds(30);
 
+	/** 负责实际模型发现请求的 Hermes API 客户端。 */
 	private final HermesApi api;
+
+	/** 预先换算为纳秒的缓存时长，用于与 {@link System#nanoTime()} 配合。 */
 	private final long cacheTtlNanos;
+
+	/** 串行化同步缓存刷新的监视器。 */
 	private final Object cacheMonitor = new Object();
+
+	/** 当前共享的异步刷新序列；无刷新时为 {@code null}。 */
 	private final AtomicReference<Mono<List<String>>> refreshInFlight = new AtomicReference<>();
 
+	/** 最近一次成功刷新或失败回退所使用的不可变模型标识列表。 */
 	private volatile List<String> cachedModels = List.of();
+
+	/** 以 {@link System#nanoTime()} 时间基准表示的缓存过期时刻。 */
 	private volatile long cacheExpiresAtNanos;
 
+	/**
+	 * 使用默认的 30 秒缓存时长创建模型管理器。
+	 *
+	 * @param api Hermes API 客户端
+	 * @throws IllegalArgumentException {@code api} 为 {@code null} 时抛出
+	 */
 	public HermesModelManager(HermesApi api) {
 		this(api, DEFAULT_CACHE_TTL);
 	}
 
+	/**
+	 * 使用指定缓存时长创建模型管理器。
+	 *
+	 * @param api Hermes API 客户端
+	 * @param cacheTtl 模型列表缓存时长，允许为零但不能为负数
+	 * @throws IllegalArgumentException {@code api} 或 {@code cacheTtl} 为 {@code null}，或缓存时长为负数时抛出
+	 */
 	public HermesModelManager(HermesApi api, Duration cacheTtl) {
 		Assert.notNull(api, "api must not be null");
 		Assert.notNull(cacheTtl, "cacheTtl must not be null");
@@ -49,10 +73,12 @@ public class HermesModelManager {
 	}
 
 	/**
-	 * Lists the model identifiers, refreshing an expired cache at most once among
-	 * concurrent callers of this synchronous method.
+	 * 同步列出模型标识。
 	 *
-	 * @return immutable model identifier list, or the last cached list on failure
+	 * <p>缓存有效时直接返回；缓存失效时在监视器内再次检查，并确保并发同步调用最多
+	 * 发起一次刷新。刷新失败时保留并返回上一次缓存，不向调用方传播上游异常。</p>
+	 *
+	 * @return 不可变模型标识列表；刷新失败时返回上一次缓存
 	 */
 	public List<String> listModels() {
 		List<String> cached = currentCache();
@@ -79,10 +105,12 @@ public class HermesModelManager {
 	}
 
 	/**
-	 * Lists the model identifiers without blocking and coalesces concurrent cache
-	 * misses into one upstream request.
+	 * 异步列出模型标识。
 	 *
-	 * @return a publisher yielding the immutable model identifier list
+	 * <p>缓存失效时使用原子引用发布一个经 {@link Mono#cache()} 共享的刷新序列；并发
+	 * 调用者加入同一次上游请求。刷新失败时发布上一次缓存，并在序列终止后清除在途引用。</p>
+	 *
+	 * @return 发布不可变模型标识列表的单值序列
 	 */
 	public Mono<List<String>> listModelsAsync() {
 		List<String> cached = currentCache();
@@ -113,6 +141,12 @@ public class HermesModelManager {
 		return this.refreshInFlight.get();
 	}
 
+	/**
+	 * 按模型标识查询单个模型。
+	 *
+	 * @param modelId 模型标识
+	 * @return 查询成功时包含模型响应；API 返回 {@code null} 或调用失败时为空
+	 */
 	public Optional<HermesApi.ModelResponse> getModel(String modelId) {
 		try {
 			return Optional.ofNullable(this.api.getModel(modelId));
@@ -123,15 +157,30 @@ public class HermesModelManager {
 		}
 	}
 
+	/**
+	 * 判断指定模型是否出现在当前模型列表中。
+	 *
+	 * @param modelId 待检查的模型标识
+	 * @return 模型列表包含该标识时返回 {@code true}
+	 */
 	public boolean isModelAvailable(String modelId) {
 		return listModels().contains(modelId);
 	}
 
-	/** The default model id: {@code hermes-agent}. */
+	/**
+	 * 返回默认模型标识。
+	 *
+	 * @return 固定值 {@code hermes-agent}
+	 */
 	public String getDefaultModel() {
 		return HermesApiConstants.DEFAULT_MODEL;
 	}
 
+	/**
+	 * 立即使模型列表缓存过期。
+	 *
+	 * <p>该操作不清空上一次模型列表，也不会取消已经开始的异步刷新；下一次读取会触发刷新。</p>
+	 */
 	public void invalidateCache() {
 		this.cacheExpiresAtNanos = 0;
 	}

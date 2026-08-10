@@ -20,12 +20,11 @@ import org.springframework.ai.model.ChatModelDescription;
 import io.github.partmeai.hermes.api.common.HermesApiConstants;
 
 /**
- * Hermes model identifier.
- * <p>
- * Hermes exposes a single model: {@code hermes-agent}. The {@code model} field
- * in API requests is accepted but cosmetic — the actual LLM is configured
- * server-side. For multi-profile setups, each profile advertises its name
- * as the model id.
+ * Hermes 模型标识枚举。
+ *
+ * <p>Hermes 默认公开 {@code hermes-agent} 模型标识。请求中的 {@code model}
+ * 字段用于协议兼容和配置档案标识，实际大模型仍由服务端配置；多配置档案场景下，
+ * 服务端可将档案名称作为模型标识公开。</p>
  *
  * @since 1.0.0
  * @see <a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server">Hermes API Server</a>
@@ -33,21 +32,32 @@ import io.github.partmeai.hermes.api.common.HermesApiConstants;
 public enum HermesModel implements ChatModelDescription {
 
 	/**
-	 * The default Hermes agent model id.
+ * 默认 Hermes Agent 模型标识。
 	 */
 	HERMES_AGENT(HermesApiConstants.DEFAULT_MODEL);
 
+	/** 服务端协议使用的模型标识。 */
 	private final String id;
 
 	HermesModel(String id) {
 		this.id = id;
 	}
 
+	/**
+	 * 返回发送给 Hermes API 的模型标识。
+	 *
+	 * @return 当前枚举值对应的模型标识
+	 */
 	public String id() {
 		return this.id;
 	}
 
 	@Override
+	/**
+	 * 返回 Spring AI 模型描述所需的模型名称。
+	 *
+	 * @return 当前枚举值对应的模型名称
+	 */
 	public String getName() {
 		return this.id;
 	}

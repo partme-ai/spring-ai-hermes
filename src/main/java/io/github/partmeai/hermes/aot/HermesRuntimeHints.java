@@ -24,11 +24,19 @@ import org.springframework.aot.hint.RuntimeHintsRegistrar;
 import static org.springframework.ai.aot.AiRuntimeHints.findJsonAnnotatedClassesInPackage;
 
 /**
- * The HermesRuntimeHints class is responsible for registering runtime hints
- * for Hermes API classes.
+ * Hermes 原生镜像运行时提示注册器。
+ *
+ * <p>扫描 Hermes 包中参与 JSON 映射的类型，并补充思考选项自定义序列化器和
+ * 反序列化器的反射元数据，使相关类型在 Spring AOT 与 GraalVM 原生镜像环境中可用。</p>
  */
 public class HermesRuntimeHints implements RuntimeHintsRegistrar {
 
+	/**
+	 * 注册 Hermes JSON 类型及自定义思考选项编解码器的反射提示。
+	 *
+	 * @param hints Spring AOT 运行时提示集合
+	 * @param classLoader 扫描 Hermes 包时使用的类加载器；接口要求传入，当前实现不直接使用
+	 */
 	@Override
 	public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
 		var mcs = MemberCategory.values();

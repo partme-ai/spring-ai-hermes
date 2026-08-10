@@ -67,17 +67,17 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 /**
- * {@link ChatModel} implementation for Hermes API Server.
- * <p>
- * Hermes exposes an OpenAI-compatible endpoint at {@code /v1/chat/completions}.
- * The {@code model} field is accepted but cosmetic — the actual LLM is
- * configured server-side. Use {@code hermes-agent} as the default model id.
- * <p>
- * Hermes-specific features:
+ * Hermes API Server 的 {@link ChatModel} 实现。
+ *
+ * <p>将 Spring AI 的提示、模型选项与工具定义转换为 OpenAI 兼容的
+ * {@code /v1/chat/completions} 请求，并提供同步、异步及流式三种调用方式。模型在
+ * 需要执行工具时递归提交包含工具结果的新提示，同时累计跨轮次的用量元数据。</p>
+ *
+ * <p>Hermes 特有能力包括：</p>
  * <ul>
- *   <li>{@code X-Hermes-Session-Key} — stable per-channel memory scoping</li>
- *   <li>{@code X-Hermes-Session-Id} — transcript-scoped session identifier</li>
- *   <li>Inline image support via content array parts</li>
+ *   <li>{@code X-Hermes-Session-Key}：稳定的通道级长期记忆作用域</li>
+ *   <li>{@code X-Hermes-Session-Id}：会话记录级标识</li>
+ *   <li>通过消息内容数组表达内联图片</li>
  *</ul>
  *
  * @author <a href="https://github.com/loong10k">Loong Wan</a>
@@ -86,28 +86,64 @@ import org.springframework.util.StringUtils;
 @Slf4j
 public class HermesChatModel implements ChatModel {
 
+	/** 默认同步调用重试模板；最多尝试一次，因此不会自动重发请求。 */
 	private static final RetryTemplate DEFAULT_RETRY_TEMPLATE = RetryTemplate.builder().maxAttempts(1).build();
 
+	/** 未配置自定义约定时使用的 Spring AI 聊天模型观测约定。 */
 	private static final ChatModelObservationConvention DEFAULT_OBSERVATION_CONVENTION =
 			new DefaultChatModelObservationConvention();
 
+	/** 构建器未提供工具管理器时使用的默认工具调用管理器。 */
 	private static final ToolCallingManager DEFAULT_TOOL_CALLING_MANAGER =
 			ToolCallingManager.builder().build();
 
+	/** 底层 Hermes HTTP API 客户端。 */
 	private final HermesApi chatApi;
+
+	/** 与每次运行时选项合并的默认聊天选项。 */
 	private final HermesChatOptions defaultOptions;
+
+	/** 创建聊天模型观测的 Micrometer 注册表。 */
 	private final ObservationRegistry observationRegistry;
+
+	/** 解析工具定义并执行模型工具调用的管理器。 */
 	private final ToolCallingManager toolCallingManager;
+
+	/** 判断当前响应是否需要执行工具的策略。 */
 	private final ToolExecutionEligibilityPredicate toolExecutionEligibilityPredicate;
+
+	/** 当前聊天模型观测命名约定，可在构造后替换。 */
 	private ChatModelObservationConvention observationConvention = DEFAULT_OBSERVATION_CONVENTION;
+
+	/** 仅用于同步 Hermes HTTP 调用的重试模板。 */
 	private final RetryTemplate retryTemplate;
 
+	/**
+	 * 使用默认工具执行资格判断器和默认单次尝试重试策略创建聊天模型。
+	 *
+	 * @param api Hermes API 客户端
+	 * @param defaultOptions 默认聊天选项
+	 * @param toolCallingManager 工具定义解析与调用管理器
+	 * @param observationRegistry Micrometer 观测注册表
+	 * @throws IllegalArgumentException 任一参数为 {@code null} 时抛出
+	 */
 	public HermesChatModel(HermesApi api, HermesChatOptions defaultOptions,
 			ToolCallingManager toolCallingManager, ObservationRegistry observationRegistry) {
 		this(api, defaultOptions, toolCallingManager, observationRegistry,
 				new DefaultToolExecutionEligibilityPredicate(), DEFAULT_RETRY_TEMPLATE);
 	}
 
+	/**
+	 * 使用完整依赖创建聊天模型。
+	 *
+	 * @param api Hermes API 客户端
+	 * @param defaultOptions 默认聊天选项
+	 * @param toolCallingManager 工具定义解析与调用管理器
+	 * @param observationRegistry Micrometer 观测注册表
+	 * @param toolExecutionEligibilityPredicate 工具执行资格判断器
+	 * @param retryTemplate 同步 HTTP 调用的重试模板
+	 * @throws IllegalArgumentException 任一参数为 {@code null} 时抛出
+	 */
 	public HermesChatModel(HermesApi api, HermesChatOptions defaultOptions,
 			ToolCallingManager toolCallingManager, ObservationRegistry observationRegistry,
 			ToolExecutionEligibilityPredicate toolExecutionEligibilityPredicate,
@@ -127,6 +163,11 @@ public class HermesChatModel implements ChatModel {
 		this.retryTemplate = retryTemplate;
 	}
 
+	/**
+	 * 创建 Hermes 聊天模型构建器。
+	 *
+	 * @return 新构建器
+	 */
 	public static Builder builder() { return new Builder(); }
 
 	static ChatResponseMetadata from(HermesApi.ChatResponse response, ChatResponse previousChatResponse) {
@@ -163,10 +204,27 @@ public class HermesChatModel implements ChatModel {
 	}
 
 	@Override
+	/**
+	 * 同步执行一次聊天调用，并按需递归执行工具调用。
+	 *
+	 * @param prompt Spring AI 提示及本次运行选项
+	 * @return 最终聊天响应；需要工具且不直接返回时为后续模型轮次的响应
+	 * @throws IllegalArgumentException 模型为空、工具配置无效或存在不支持的消息类型时抛出
+	 */
 	public ChatResponse call(Prompt prompt) {
 		return internalCall(buildRequestPrompt(prompt), null);
 	}
 
+	/**
+	 * 异步执行一次聊天调用，并在受控弹性线程池上按需执行阻塞式工具。
+	 *
+	 * <p>每次订阅创建独立观测并保留 Reactor 上下文。工具结果要求继续对话时，使用
+	 * 历史消息递归调用本方法的内部实现；直接返回工具结果时不再请求 Hermes 服务。</p>
+	 *
+	 * @param prompt Spring AI 提示及本次运行选项
+	 * @return 发布最终聊天响应的单值序列
+	 * @throws IllegalArgumentException 模型为空或工具配置无效时在创建发布者前抛出
+	 */
 	public Mono<ChatResponse> callAsync(Prompt prompt) {
 		return internalCallAsync(buildRequestPrompt(prompt), null);
 	}
@@ -277,6 +335,13 @@ public class HermesChatModel implements ChatModel {
 	}
 
 	@Override
+	/**
+	 * 流式执行聊天调用，并按需执行工具调用及后续流式轮次。
+	 *
+	 * @param prompt Spring AI 提示及本次运行选项
+	 * @return 经消息聚合器处理的聊天响应流
+	 * @throws IllegalArgumentException 模型为空或工具配置无效时抛出
+	 */
 	public Flux<ChatResponse> stream(Prompt prompt) {
 		return internalStream(buildRequestPrompt(prompt), null);
 	}
@@ -330,6 +395,13 @@ public class HermesChatModel implements ChatModel {
 		});
 	}
 
+	/**
+	 * 将运行时选项复制为 Hermes 选项并与默认配置合并。
+	 *
+	 * @param prompt 原始提示
+	 * @return 指令不变、选项已归一化的请求提示
+	 * @throws IllegalArgumentException 合并后模型为空或工具回调配置无效时抛出
+	 */
 	Prompt buildRequestPrompt(Prompt prompt) {
 		HermesChatOptions runtimeOptions = null;
 		if (prompt.getOptions() != null) {
@@ -360,6 +432,14 @@ public class HermesChatModel implements ChatModel {
 		return new Prompt(prompt.getInstructions(), requestOptions);
 	}
 
+	/**
+	 * 将 Spring AI 消息和工具定义转换为 Hermes 聊天补全请求。
+	 *
+	 * @param prompt 已归一化为 Hermes 选项的提示
+	 * @param stream 是否请求 SSE 流式响应
+	 * @return Hermes 聊天补全请求
+	 * @throws IllegalArgumentException 遇到不支持的消息类型时抛出
+	 */
 	HermesApi.ChatRequest hermesChatRequest(Prompt prompt, boolean stream) {
 		List<HermesApi.Message> messages = prompt.getInstructions().stream().flatMap(msg -> {
 			if (msg.getMessageType() == MessageType.SYSTEM) {
@@ -424,28 +504,98 @@ public class HermesChatModel implements ChatModel {
 	}
 
 	@Override
+	/**
+	 * 返回默认聊天选项的副本。
+	 *
+	 * @return 与内部默认值等价但可由调用方独立修改的 Hermes 选项
+	 */
 	public ChatOptions getDefaultOptions() { return HermesChatOptions.fromOptions(this.defaultOptions); }
 
+	/**
+	 * 替换聊天模型观测命名约定。
+	 *
+	 * @param c 新的观测约定
+	 * @throws IllegalArgumentException 参数为 {@code null} 时抛出
+	 */
 	public void setObservationConvention(ChatModelObservationConvention c) {
 		Assert.notNull(c, "observationConvention cannot be null"); this.observationConvention = c;
 	}
 
+	/**
+	 * Hermes 聊天模型构建器。
+	 *
+	 * <p>收集 API、默认选项、工具调用、观测和重试依赖；未显式设置工具管理器时，
+	 * 使用类级默认实现。</p>
+	 */
 	public static final class Builder {
+		/** 待注入的 Hermes API 客户端。 */
 		private HermesApi api;
+
+		/** 默认聊天选项，初始模型为 {@code hermes-agent}。 */
 		private HermesChatOptions defaultOptions = HermesChatOptions.builder().model(HermesModel.HERMES_AGENT.id()).build();
+
+		/** 可选工具调用管理器。 */
 		private ToolCallingManager toolCallingManager;
+
+		/** 工具执行资格判断器。 */
 		private ToolExecutionEligibilityPredicate toolExecutionEligibilityPredicate = new DefaultToolExecutionEligibilityPredicate();
+
+		/** Micrometer 观测注册表，默认不记录观测。 */
 		private ObservationRegistry observationRegistry = ObservationRegistry.NOOP;
+
+		/** 同步调用重试模板。 */
 		private RetryTemplate retryTemplate = DEFAULT_RETRY_TEMPLATE;
 
 		private Builder() {}
+		/**
+		 * 设置 Hermes API 客户端。
+		 *
+		 * @param v API 客户端
+		 * @return 当前构建器
+		 */
 		public Builder api(HermesApi v) { api = v; return this; }
+		/**
+		 * 设置默认聊天选项。
+		 *
+		 * @param v 默认选项
+		 * @return 当前构建器
+		 */
 		public Builder defaultOptions(HermesChatOptions v) { defaultOptions = v; return this; }
+		/**
+		 * 设置工具调用管理器。
+		 *
+		 * @param v 工具调用管理器；未设置时使用默认实现
+		 * @return 当前构建器
+		 */
 		public Builder toolCallingManager(ToolCallingManager v) { toolCallingManager = v; return this; }
+		/**
+		 * 设置工具执行资格判断器。
+		 *
+		 * @param v 工具执行资格判断器
+		 * @return 当前构建器
+		 */
 		public Builder toolExecutionEligibilityPredicate(ToolExecutionEligibilityPredicate v) { toolExecutionEligibilityPredicate = v; return this; }
+		/**
+		 * 设置 Micrometer 观测注册表。
+		 *
+		 * @param v 观测注册表
+		 * @return 当前构建器
+		 */
 		public Builder observationRegistry(ObservationRegistry v) { observationRegistry = v; return this; }
+		/**
+		 * 设置同步调用重试模板。
+		 *
+		 * @param v 重试模板
+		 * @return 当前构建器
+		 */
 		public Builder retryTemplate(RetryTemplate v) { retryTemplate = v; return this; }
 
+		/**
+		 * 创建 Hermes 聊天模型。
+		 *
+		 * @return 使用当前配置创建的聊天模型
+		 * @throws IllegalArgumentException API、默认选项、观测、资格判断器或重试模板为空时抛出
+		 */
 		public HermesChatModel build() {
 			if (toolCallingManager != null) {
 				return new HermesChatModel(api, defaultOptions, toolCallingManager, observationRegistry, toolExecutionEligibilityPredicate, retryTemplate);
