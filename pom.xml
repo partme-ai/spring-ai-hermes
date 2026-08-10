@@ -5,7 +5,7 @@
 
     <groupId>io.github.partmeai</groupId>
     <artifactId>spring-ai-hermes</artifactId>
-    <version>3.5.x.20260612-SNAPSHOT</version>
+    <version>1.0.x.20260630-SNAPSHOT</version>
     <packaging>jar</packaging>
     <name>${project.groupId}:${project.artifactId}</name>
     <description>Spring AI model integration for Hermes Gateway (Chat)</description>
@@ -57,6 +57,7 @@
                     <configuration>
                         <source>${java.version}</source>
                         <target>${java.version}</target>
+                        <release>${java.version}</release>
                         <encoding>${project.build.sourceEncoding}</encoding>
                         <maxmem>512M</maxmem>
                         <annotationProcessorPaths>

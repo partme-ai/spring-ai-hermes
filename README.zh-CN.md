@@ -6,7 +6,7 @@
 
 **Spring Boot Starter，集成 spring-ai-hermes**
 
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.easy4j/spring-ai-hermes)](https://github.com/easy-4-java/spring-ai-hermes)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.partmeai/spring-ai-hermes)](https://github.com/partme-ai/spring-ai-hermes)
 [![Java](https://img.shields.io/badge/Java-17-orange)](#3-运行要求与兼容性)
 [![License](https://img.shields.io/badge/license-Apache-2.0-green)](https://www.apache.org/licenses/LICENSE-2.0)
 
@@ -21,9 +21,9 @@
 
 ---
 
-> **当前版本**：`3.5.x.20260612-SNAPSHOT`<br>
+> **当前版本**：`1.0.x.20260630-SNAPSHOT`<br>
 > **JDK 基线**：`17`<br>
-> **Group ID**：`io.github.easy4j`<br>
+> **Group ID**：`io.github.partmeai`<br>
 > **Artifact ID**：`spring-ai-hermes`<br>
 > **许可证**：Apache License 2.0<br>
 
@@ -37,7 +37,7 @@
 | 消费方 | 使用 spring-ai-hermes 的 Spring Boot 应用 |
 | 核心能力 | 自动装配、属性绑定、开箱即用的 spring-ai-hermes Bean |
 | JDK | `17` |
-| 坐标 | `io.github.easy4j:spring-ai-hermes:3.5.x.20260612-SNAPSHOT` |
+| 坐标 | `io.github.partmeai:spring-ai-hermes:1.0.x.20260630-SNAPSHOT` |
 | 配置前缀 | `spring.ai.hermes` |
 
 ## 2. 核心能力
@@ -53,7 +53,8 @@
 | 依赖 | 最低版本 | 证据来源 |
 |---|---:|---|
 | JDK | `17` | `pom.xml` |
-| Spring Boot | `3.x` | `pom.xml` parent |
+| Spring AI | `1.1.7` | `spring-ai-bom` |
+| Spring Boot | `3.5.5` | `spring-boot-dependencies` |
 | Maven | `3.6+` | Maven Enforcer |
 
 ## 4. 自动装配
@@ -75,9 +76,9 @@ Starter 自动装配以下 Bean：
 
 ```xml
 <dependency>
-    <groupId>io.github.easy4j</groupId>
+    <groupId>io.github.partmeai</groupId>
     <artifactId>spring-ai-hermes</artifactId>
-    <version>3.5.x.20260612-SNAPSHOT</version>
+    <version>1.0.x.20260630-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -131,9 +132,8 @@ private HermesApi hermesApi;
 
 | 分支 | JDK | Spring Boot | 组件版本 | 状态 |
 |---|---:|---:|---|:---:|
-| `2.3.x` / `2.7.x` | `8+` | 2.3.x / 2.7.x | `1.0.x` | 维护中 |
-| `3.0.x` ~ `3.5.x` | `17` | 3.x | `2.0.x` | 维护中 |
-| `4.0.x` / `4.1.x` | `17+` | 4.x | `3.0.x` | 活跃开发 |
+| `feature/1.0.x` | `17` | 3.5.x / Spring AI 1.1.7 | `1.0.x.20260630-SNAPSHOT` | 当前分支 |
+| `feature/2.0.x` | `17` | 4.0.x–4.1.x / Spring AI 2.0.0 | `2.0.x.20260630-SNAPSHOT` | 活跃开发 |
 
 ## 9. 构建与测试
 

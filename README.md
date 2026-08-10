@@ -6,7 +6,7 @@
 
 **Spring Boot Starter for spring-ai-hermes**
 
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.easy4j/spring-ai-hermes)](https://github.com/easy-4-java/spring-ai-hermes)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.partmeai/spring-ai-hermes)](https://github.com/partme-ai/spring-ai-hermes)
 [![Java](https://img.shields.io/badge/Java-17-orange)](#3-requirements-and-compatibility)
 [![License](https://img.shields.io/badge/license-Apache-2.0-green)](https://www.apache.org/licenses/LICENSE-2.0)
 
@@ -21,9 +21,9 @@
 
 ---
 
-> **Current Version**：`3.5.x.20260612-SNAPSHOT`<br>
+> **Current Version**：`1.0.x.20260630-SNAPSHOT`<br>
 > **JDK Baseline**：`17`<br>
-> **Group ID**：`io.github.easy4j`<br>
+> **Group ID**：`io.github.partmeai`<br>
 > **Artifact ID**：`spring-ai-hermes`<br>
 > **License**：Apache License 2.0<br>
 
@@ -37,7 +37,7 @@
 | Consumers | Spring Boot applications using spring-ai-hermes |
 | Core Capabilities | auto-configuration, property binding, ready-to-use beans for spring-ai-hermes |
 | JDK | `17` |
-| Coordinates | `io.github.easy4j:spring-ai-hermes:3.5.x.20260612-SNAPSHOT` |
+| Coordinates | `io.github.partmeai:spring-ai-hermes:1.0.x.20260630-SNAPSHOT` |
 | Config Prefix | `spring.ai.hermes` |
 
 ## 2. Core Capabilities
@@ -53,7 +53,8 @@
 | Dependency | Minimum | Evidence |
 |---|---:|---|
 | JDK | `17` | `pom.xml` |
-| Spring Boot | `3.x` | `pom.xml` parent |
+| Spring AI | `1.1.7` | `spring-ai-bom` |
+| Spring Boot | `3.5.5` | `spring-boot-dependencies` |
 | Maven | `3.6+` | Maven Enforcer |
 
 ## 4. Auto-configuration
@@ -75,9 +76,9 @@ Auto-configuration registration:
 
 ```xml
 <dependency>
-    <groupId>io.github.easy4j</groupId>
+    <groupId>io.github.partmeai</groupId>
     <artifactId>spring-ai-hermes</artifactId>
-    <version>3.5.x.20260612-SNAPSHOT</version>
+    <version>1.0.x.20260630-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -131,9 +132,8 @@ private HermesApi hermesApi;
 
 | Branch | JDK | Spring Boot | Component Version | Status |
 |---|---:|---:|---|:---:|
-| `2.3.x` / `2.7.x` | `8+` | 2.3.x / 2.7.x | `1.0.x` | Maintenance |
-| `3.0.x` ~ `3.5.x` | `17` | 3.x | `2.0.x` | Maintenance |
-| `4.0.x` / `4.1.x` | `17+` | 4.x | `3.0.x` | Active |
+| `feature/1.0.x` | `17` | 3.5.x / Spring AI 1.1.7 | `1.0.x.20260630-SNAPSHOT` | Current |
+| `feature/2.0.x` | `17` | 4.0.x–4.1.x / Spring AI 2.0.0 | `2.0.x.20260630-SNAPSHOT` | Active |
 
 ## 9. Build and Test
 
