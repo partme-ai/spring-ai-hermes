@@ -43,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Tests for {@link HermesChatModel} chat request construction.
  *
- * @author Loong Wan
+ * @author <a href="https://github.com/loong10k">Loong Wan</a>
  */
 public class HermesChatRequestTests {
 

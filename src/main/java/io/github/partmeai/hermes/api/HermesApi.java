@@ -41,7 +41,7 @@ import org.springframework.web.reactive.function.client.WebClient;
  * {@code /v1/responses}, {@code /v1/models}, plus the Runs API, health, capabilities,
  * skills, and toolsets discovery.
  *
- * @author Loong Wan
+ * @author <a href="https://github.com/loong10k">Loong Wan</a>
  * @see <a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server">Hermes API Server</a>
  */
 @Slf4j

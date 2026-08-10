@@ -15,7 +15,7 @@ import lombok.extern.slf4j.Slf4j;
  * multi-profile setups). Use the returned id directly as the OpenAI {@code model}
  * value in chat completion requests.
  *
- * @author Loong Wan
+ * @author <a href="https://github.com/loong10k">Loong Wan</a>
  * @see <a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server">Hermes API Server</a>
  */
 @Slf4j

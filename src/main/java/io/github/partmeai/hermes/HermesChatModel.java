@@ -80,7 +80,7 @@ import org.springframework.util.StringUtils;
  *   <li>Inline image support via content array parts</li>
  *</ul>
  *
- * @author Loong Wan
+ * @author <a href="https://github.com/loong10k">Loong Wan</a>
  * @see <a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server">Hermes API Server</a>
  */
 @Slf4j

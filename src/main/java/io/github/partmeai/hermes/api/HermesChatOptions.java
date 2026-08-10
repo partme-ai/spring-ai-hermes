@@ -49,7 +49,7 @@ import org.springframework.util.StringUtils;
  * <strong>Note:</strong> The {@code model} field is accepted but cosmetic —
  * the actual LLM model is configured server-side.
  *
- * @author Loong Wan
+ * @author <a href="https://github.com/loong10k">Loong Wan</a>
  * @see <a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server">Hermes API Server</a>
  */
 @JsonInclude(Include.NON_NULL)
